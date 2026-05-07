@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CLI P2P Chat — non-s</title>
+    <meta name="description" content="Chat P2P descentralizado via sockets TCP/IP e UDP. Demo interativo no browser.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="app">
+    <!-- HEADER -->
+    <header class="header">
+        <div class="header-left">
+            <span class="prompt">~/</span><span class="logo">cli-p2p-chat</span><span class="cursor-blink">█</span>
+        </div>
+        <div class="header-right">
+            <span class="status-dot" id="statusDot"></span>
+            <span class="status-text" id="statusText">offline</span>
+        </div>
+    </header>
+
+    <!-- LAYOUT -->
+    <div class="layout">
+        <!-- SIDEBAR -->
+        <aside class="sidebar">
+            <div class="sidebar-section">
+                <div class="section-label">// peers</div>
+                <div class="peer-list" id="peerList">
+                    <div class="peer-item no-peers">nenhum peer conectado</div>
+                </div>
+            </div>
+            <div class="sidebar-section">
+                <div class="section-label">// connect</div>
+                <div class="connect-form">
+                    <input type="text" id="peerInput" class="peer-input" placeholder="192.168.x.x:8080" />
+                    <button id="connectBtn" class="btn-connect">connect</button>
+                </div>
+                <button id="hostBtn" class="btn-host">host server</button>
+            </div>
+            <div class="sidebar-section">
+                <div class="section-label">// info</div>
+                <div class="info-block">
+                    <div class="info-line"><span class="k">protocol</span><span class="v">TCP/IP + UDP</span></div>
+                    <div class="info-line"><span class="k">mode</span><span class="v" id="infoMode">idle</span></div>
+                    <div class="info-line"><span class="k">port</span><span class="v" id="infoPort">—</span></div>
+                    <div class="info-line"><span class="k">latency</span><span class="v" id="infoLatency">—</span></div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- TERMINAL -->
+        <main class="terminal-area">
+            <div class="terminal-output" id="output"></div>
+            <div class="terminal-input-row">
+                <span class="t-prompt" id="inputPrompt">guest@p2p:~$</span>
+                <input type="text" id="msgInput" class="msg-input" placeholder="digite uma mensagem ou /help..." autofocus />
+                <button id="sendBtn" class="btn-send">↵</button>
+            </div>
+        </main>
+    </div>
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
