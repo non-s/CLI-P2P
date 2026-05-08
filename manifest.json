@@ -1,0 +1,12 @@
+{
+  "name": "Chat em Grupo — non-s",
+  "short_name": "GroupChat",
+  "description": "Chat em grupo em tempo real via Supabase Realtime Broadcast e Presence",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#0d1117",
+  "theme_color": "#00b4d8",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

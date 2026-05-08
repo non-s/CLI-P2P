@@ -149,6 +149,7 @@ async function joinRoom(code) {
             onlineSection.style.display  = '';
 
             logSystem(`Conectado à sala <strong>${code}</strong>. Compartilhe o código para convidar outros.`, 'success');
+            await loadHistory(code);
         } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
             setStatus('idle');
             state.connected = false;
@@ -233,6 +234,43 @@ function sendMessage(text) {
         event: 'msg',
         payload: { author: state.username, text: text.trim(), sid: SESSION_ID },
     });
+    /* Persistir mensagem (silencioso em caso de erro) */
+    sb.from('messages').insert({
+        room_code: state.roomCode,
+        nick: state.username,
+        content: text.trim(),
+    }).catch(() => {});
+}
+
+/* ── Histórico de mensagens ──
+   Requer tabela no Supabase:
+   CREATE TABLE IF NOT EXISTS messages (
+     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+     room_code TEXT NOT NULL,
+     nick TEXT NOT NULL DEFAULT 'anônimo',
+     content TEXT NOT NULL,
+     created_at TIMESTAMPTZ DEFAULT NOW()
+   );
+   ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
+   CREATE POLICY "messages_select" ON messages FOR SELECT USING (true);
+   CREATE POLICY "messages_insert" ON messages FOR INSERT WITH CHECK (length(content) > 0 AND length(content) < 2000);
+*/
+async function loadHistory(roomCode) {
+    const { data, error } = await sb
+        .from('messages')
+        .select('nick, content, created_at')
+        .eq('room_code', roomCode)
+        .order('created_at', { ascending: true })
+        .limit(100);
+
+    if (error || !data?.length) return;
+
+    logSystem(`── ${data.length} mensagem(ns) anterior(es) ──`, 'info');
+    data.forEach(m => {
+        const isMine = m.nick === state.username;
+        logMsg(m.nick, m.content, isMine ? 'sent' : 'received');
+    });
+    logSystem('── fim do histórico ──', 'info');
 }
 
 /* ── Init ── */
@@ -241,6 +279,19 @@ document.addEventListener('DOMContentLoaded', () => {
     logSystem('Chat em Grupo — Supabase Realtime Broadcast + Presence', 'info');
     logSystem('Digite um código de 6 dígitos para entrar, ou clique em "Nova Sala" para criar uma.', '');
     logSystem('Digite /help para ver os comandos.', '');
+
+    /* Preencher apelido a partir do campo de nickname na entrada */
+    const nickField = document.getElementById('nickInput');
+    if (nickField) {
+        nickField.value = state.username;
+        nickField.addEventListener('change', () => {
+            const v = nickField.value.trim();
+            if (v && v.length <= 24) {
+                state.username = v;
+                updateInfoNick();
+            }
+        });
+    }
 
     document.getElementById('btnJoin').addEventListener('click', () => joinRoom(roomCodeInput.value));
 
