@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>P2P Chat — WebRTC · non-s</title>
-    <meta name="description" content="Chat peer-to-peer real no browser usando WebRTC DataChannel e Supabase Realtime. Sem servidor de sinalização dedicado.">
+    <title>Chat em Grupo — non-s</title>
+    <meta name="description" content="Chat em grupo em tempo real no navegador usando Supabase Realtime. Compartilhe um código de sala — todos se conectam instantaneamente.">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@300;400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
@@ -14,8 +14,8 @@
 
     <header class="header">
         <div class="header-left">
-            <span class="prompt">~/</span><span class="logo">p2p-chat</span>
-            <span class="badge-webrtc">WebRTC</span>
+            <span class="prompt">~/</span><span class="logo">group-chat</span>
+            <span class="badge">Realtime</span>
         </div>
         <div class="header-right">
             <span class="status-dot" id="statusDot"></span>
@@ -28,50 +28,50 @@
         <!-- SIDEBAR -->
         <aside class="sidebar">
 
-            <div class="sidebar-section">
-                <div class="section-label">// sessão</div>
-                <div class="session-btns">
-                    <button id="btnCreateRoom" class="btn-session primary">Criar Sala</button>
-                    <button id="btnJoinRoom"   class="btn-session">Entrar na Sala</button>
-                </div>
+            <!-- Seção de conexão (visível quando fora de sala) -->
+            <div class="sidebar-section" id="connectSection">
+                <div class="section-label">// conectar</div>
+                <input id="roomCodeInput" class="room-input" type="text"
+                    maxlength="6" placeholder="código da sala"
+                    autocomplete="off" inputmode="numeric" />
+                <button id="btnJoin" class="btn-session primary" style="margin-top:.4rem;width:100%">Entrar na Sala</button>
+                <button id="btnNew"  class="btn-session" style="margin-top:.3rem;width:100%">Nova Sala</button>
             </div>
 
-            <!-- Código da sala criada (Peer A) -->
-            <div class="sidebar-section" id="roomCodeSection" style="display:none">
-                <div class="section-label">// código da sala</div>
+            <!-- Seção da sala (visível quando conectado) -->
+            <div class="sidebar-section" id="roomSection" style="display:none">
+                <div class="section-label">// sala</div>
                 <div class="room-code" id="roomCodeDisplay">——————</div>
                 <button id="btnCopyCode" class="btn-copy">Copiar Código</button>
-                <p class="room-hint">Compartilhe este código com o outro peer.</p>
+                <p class="room-hint">Compartilhe este código para convidar outros.</p>
+                <button id="btnLeave" class="btn-leave">Sair da Sala</button>
             </div>
 
-            <!-- Entrar numa sala (Peer B) -->
-            <div class="sidebar-section" id="joinSection" style="display:none">
-                <div class="section-label">// entrar na sala</div>
-                <input id="roomCodeInput" class="room-input" type="text"
-                    maxlength="6" placeholder="código de 6 dígitos"
-                    autocomplete="off" inputmode="numeric" />
-                <button id="btnConfirmJoin" class="btn-session primary" style="margin-top:.4rem;width:100%">Conectar</button>
+            <!-- Usuários online (visível quando conectado) -->
+            <div class="sidebar-section" id="onlineSection" style="display:none">
+                <div class="section-label">// online — <span id="onlineCount">0</span></div>
+                <div id="usersList" class="users-list"></div>
             </div>
 
+            <!-- Informações (sempre visível) -->
             <div class="sidebar-section">
-                <div class="section-label">// protocolo</div>
+                <div class="section-label">// info</div>
                 <div class="info-block">
-                    <div class="info-line"><span class="k">transport</span><span class="v">RTCDataChannel</span></div>
-                    <div class="info-line"><span class="k">encryption</span><span class="v">DTLS-SRTP</span></div>
-                    <div class="info-line"><span class="k">signaling</span><span class="v">Supabase Realtime</span></div>
-                    <div class="info-line"><span class="k">stun</span><span class="v">stun.l.google.com</span></div>
-                    <div class="info-line"><span class="k">modo</span><span class="v" id="infoMode">idle</span></div>
-                    <div class="info-line"><span class="k">ice</span><span class="v" id="infoIce">—</span></div>
+                    <div class="info-line"><span class="k">transporte</span><span class="v">Supabase Realtime</span></div>
+                    <div class="info-line"><span class="k">protocolo</span><span class="v">Broadcast + Presence</span></div>
+                    <div class="info-line"><span class="k">sala</span><span class="v" id="infoRoom">—</span></div>
+                    <div class="info-line"><span class="k">apelido</span><span class="v" id="infoNick">—</span></div>
                 </div>
             </div>
 
+            <!-- Como funciona -->
             <div class="sidebar-section">
                 <div class="section-label">// como funciona</div>
                 <div class="help-text">
-                    <p><strong>1.</strong> Peer A → "Criar Sala" → aparece código</p>
-                    <p><strong>2.</strong> Peer B → "Entrar na Sala" → digita código → Conectar</p>
-                    <p><strong>3.</strong> Supabase Realtime troca SDP automaticamente</p>
-                    <p><strong>4.</strong> Canal WebRTC direto. Sem servidor no meio.</p>
+                    <p><strong>1.</strong> Clique em "Nova Sala" para gerar um código</p>
+                    <p><strong>2.</strong> Compartilhe o código com qualquer pessoa</p>
+                    <p><strong>3.</strong> Eles digitam e clicam em "Entrar na Sala"</p>
+                    <p><strong>4.</strong> Todos na sala conversam em tempo real</p>
                 </div>
             </div>
 
@@ -81,9 +81,9 @@
         <main class="terminal-area">
             <div class="terminal-output" id="output"></div>
             <div class="terminal-input-row">
-                <span class="t-prompt" id="inputPrompt">guest@p2p:~$</span>
+                <span class="t-prompt" id="inputPrompt">visitante@chat:~$</span>
                 <input type="text" id="msgInput" class="msg-input"
-                    placeholder="mensagem ou /nick /demo /clear /help..."
+                    placeholder="mensagem ou /nick /leave /clear /help..."
                     autocomplete="off" autofocus />
                 <button id="sendBtn" class="btn-send">↵</button>
             </div>

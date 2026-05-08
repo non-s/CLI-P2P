@@ -2,38 +2,40 @@ const SUPABASE_URL      = 'https://bvquyfzllqnbfxncsacn.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ2cXV5ZnpsbHFuYmZ4bmNzYWNuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgxODU1MzQsImV4cCI6MjA5Mzc2MTUzNH0.xa_rs4bVLoTv58P7U8rDOaPjo1Dqt60q8cR-IWFpbug';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-const STUN_SERVERS = [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-];
+/* ID de sessão único — usado como chave de presença para que cada aba seja uma entidade distinta */
+const SESSION_ID = (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2));
+
+/* Apelido padrão aleatório para minimizar colisões no primeiro carregamento */
+const ADJETIVOS = ['veloz','forte','sombrio','neon','cyber','fantasma','hex','byte','silente','rapido'];
+const SUBSTANTIVOS = ['raposa','lobo','falcão','corvo','gato','dev','bit','node','ping','stack'];
+function randomNick() {
+    return ADJETIVOS[Math.floor(Math.random() * ADJETIVOS.length)] + '_' +
+           SUBSTANTIVOS[Math.floor(Math.random() * SUBSTANTIVOS.length)];
+}
 
 const state = {
-    pc: null,
-    channel: null,
-    rtChannel: null,
-    roomCode: null,
-    connected: false,
-    username: 'guest',
-    history: [],
+    channel:    null,
+    roomCode:   null,
+    connected:  false,
+    username:   randomNick(),
+    history:    [],
     historyIdx: -1,
-    demoMode: false,
 };
 
-/* ── DOM ── */
-const output      = document.getElementById('output');
-const msgInput    = document.getElementById('msgInput');
-const sendBtn     = document.getElementById('sendBtn');
-const statusDot   = document.getElementById('statusDot');
-const statusText  = document.getElementById('statusText');
-const infoMode    = document.getElementById('infoMode');
-const infoIce     = document.getElementById('infoIce');
-const inputPrompt = document.getElementById('inputPrompt');
-
-const roomCodeSection = document.getElementById('roomCodeSection');
+/* ── DOM ──*/
+const output         = document.getElementById('output');
+const msgInput       = document.getElementById('msgInput');
+const sendBtn        = document.getElementById('sendBtn');
+const statusDot      = document.getElementById('statusDot');
+const statusText     = document.getElementById('statusText');
+const inputPrompt    = document.getElementById('inputPrompt');
+const roomCodeInput  = document.getElementById('roomCodeInput');
 const roomCodeDisplay = document.getElementById('roomCodeDisplay');
-const joinSection     = document.getElementById('joinSection');
-const roomCodeInput   = document.getElementById('roomCodeInput');
-const btnConfirmJoin  = document.getElementById('btnConfirmJoin');
+const usersList      = document.getElementById('usersList');
+const onlineCount    = document.getElementById('onlineCount');
+const connectSection = document.getElementById('connectSection');
+const roomSection    = document.getElementById('roomSection');
+const onlineSection  = document.getElementById('onlineSection');
 
 /* ── Log ── */
 function now() {
@@ -53,22 +55,21 @@ function logSystem(text, variant = '') {
 }
 
 function logMsg(author, text, type = 'received') {
-    log(`<span class="author">[${author}]</span><span class="text">${text}</span><span class="time">${now()}</span>`, `msg ${type}`);
+    const a = author.replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    const t = text.replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    log(`<span class="author">[${a}]</span><span class="text">${t}</span><span class="time">${now()}</span>`, `msg ${type}`);
 }
 
 /* ── Status ── */
 function setStatus(s) {
     const map = {
-        idle:       { dot: '',           text: 'desconectado',    mode: 'idle' },
-        connecting: { dot: 'connecting', text: 'conectando...',   mode: 'handshake' },
-        connected:  { dot: 'connected',  text: 'conectado (P2P)', mode: 'datachannel' },
-        failed:     { dot: '',           text: 'falha',           mode: 'erro' },
-        demo:       { dot: 'connected',  text: 'demo mode',       mode: 'simulado' },
+        idle:       { dot: '',           text: 'desconectado' },
+        connecting: { dot: 'connecting', text: 'conectando...' },
+        connected:  { dot: 'connected',  text: 'online' },
     };
     const m = map[s] || map.idle;
     statusDot.className    = `status-dot ${m.dot}`;
     statusText.textContent = m.text;
-    infoMode.textContent   = m.mode;
 }
 
 /* ── Helpers ── */
@@ -76,280 +77,192 @@ function genCode() {
     return String(Math.floor(100000 + Math.random() * 900000));
 }
 
-function createPC() {
-    const pc = new RTCPeerConnection({ iceServers: STUN_SERVERS });
-    pc.oniceconnectionstatechange = () => {
-        infoIce.textContent = pc.iceConnectionState;
-        if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
-            setStatus('connected');
-            state.connected = true;
-            logSystem('Canal P2P estabelecido via WebRTC DataChannel.', 'success');
-            logSystem('Criptografia DTLS-SRTP ativa. Sem servidor intermediário.', 'info');
-            if (state.rtChannel) {
-                sb.removeChannel(state.rtChannel);
-                state.rtChannel = null;
-            }
-        }
-        if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
-            setStatus('failed');
-            state.connected = false;
-            logSystem('Conexão encerrada ou falhou.', 'warn');
-        }
-    };
-    return pc;
+function esc(s) { return String(s).replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function updateInfoNick() {
+    document.getElementById('infoNick').textContent = state.username;
+    inputPrompt.textContent = `${state.username}@chat:~$`;
 }
 
-function waitForICE(pc) {
-    return new Promise(resolve => {
-        if (pc.iceGatheringState === 'complete') { resolve(); return; }
-        const handler = () => {
-            if (pc.iceGatheringState === 'complete') {
-                pc.removeEventListener('icegatheringstatechange', handler);
-                resolve();
-            }
-        };
-        pc.addEventListener('icegatheringstatechange', handler);
-        setTimeout(resolve, 4000);
-    });
+/* ── Presença ── */
+function renderUsers(presenceState) {
+    const users = Object.values(presenceState).flat().map(p => p.username);
+    onlineCount.textContent = users.length;
+    usersList.innerHTML = users
+        .map(u => `<span class="user-pill${u === state.username ? ' me' : ''}">${esc(u)}${u === state.username ? ' (você)' : ''}</span>`)
+        .join('');
 }
 
-function setupChannel(ch) {
-    state.channel = ch;
-    ch.onopen = () => {
-        setStatus('connected');
-        state.connected = true;
-        logSystem('Canal aberto. Pode enviar mensagens agora.', 'success');
-        roomCodeSection.style.display = 'none';
-        joinSection.style.display = 'none';
-    };
-    ch.onclose = () => {
-        state.connected = false;
-        setStatus('idle');
-        logSystem('Canal encerrado pelo peer.', 'warn');
-    };
-    ch.onmessage = e => {
-        try {
-            const { author, text } = JSON.parse(e.data);
-            logMsg(author || 'peer', text);
-        } catch {
-            logMsg('peer', e.data);
-        }
-    };
-    ch.onerror = () => logSystem('Erro no canal de dados.', 'error');
-}
-
-/* ── Criar Sala (Peer A) ── */
-async function createRoom() {
-    resetConnection();
-    state.roomCode = genCode();
-    state.pc = createPC();
-
-    const ch = state.pc.createDataChannel('chat', { ordered: true });
-    setupChannel(ch);
-
-    setStatus('connecting');
-    logSystem('Gerando sala... aguarde o ICE gathering.', 'info');
-
-    const offer = await state.pc.createOffer();
-    await state.pc.setLocalDescription(offer);
-    await waitForICE(state.pc);
-    const localDesc = state.pc.localDescription;
-
-    roomCodeDisplay.textContent = state.roomCode;
-    roomCodeSection.style.display = 'block';
-    joinSection.style.display = 'none';
-
-    state.rtChannel = sb.channel(`p2p-${state.roomCode}`, {
-        config: { broadcast: { self: false } },
-    });
-
-    /* Peer B chegou tarde: reenvia a oferta */
-    state.rtChannel.on('broadcast', { event: 'request-offer' }, () => {
-        state.rtChannel.send({ type: 'broadcast', event: 'offer', payload: { sdp: localDesc } });
-    });
-
-    state.rtChannel.on('broadcast', { event: 'answer' }, async ({ payload }) => {
-        if (!state.pc || state.pc.signalingState !== 'have-local-offer') return;
-        await state.pc.setRemoteDescription(payload.sdp);
-        logSystem('Resposta recebida. Aguardando ICE...', 'info');
-    });
-
-    state.rtChannel.subscribe(() => {
-        /* Publica oferta inicial ao se inscrever */
-        state.rtChannel.send({ type: 'broadcast', event: 'offer', payload: { sdp: localDesc } });
-        logSystem(`Sala criada: <strong>${state.roomCode}</strong>. Compartilhe o código com o outro peer.`, 'success');
-    });
-}
-
-/* ── Entrar na Sala (Peer B) ── */
-async function joinRoom() {
-    const code = roomCodeInput.value.trim().replace(/\D/g, '');
+/* ── Entrar / Sair ── */
+async function joinRoom(code) {
+    code = code.trim().replace(/\D/g, '');
     if (code.length !== 6) {
-        logSystem('Digite o código de 6 dígitos da sala.', 'warn');
+        logSystem('Por favor, insira um código de sala de 6 dígitos.', 'warn');
         return;
     }
+    if (state.channel) await leaveRoom(true);
 
-    resetConnection();
-    state.pc = createPC();
-    state.pc.ondatachannel = e => setupChannel(e.channel);
-
+    state.roomCode = code;
     setStatus('connecting');
-    logSystem(`Conectando à sala ${code}...`, 'info');
+    logSystem(`Entrando na sala ${code}...`, 'info');
 
-    state.rtChannel = sb.channel(`p2p-${code}`, {
-        config: { broadcast: { self: false } },
+    state.channel = sb.channel(`chat-room-${code}`, {
+        config: {
+            broadcast: { self: true },
+            presence:  { key: SESSION_ID },
+        },
     });
 
-    state.rtChannel.on('broadcast', { event: 'offer' }, async ({ payload }) => {
-        if (!state.pc || state.pc.signalingState !== 'stable') return;
-        await state.pc.setRemoteDescription(payload.sdp);
-        const answer = await state.pc.createAnswer();
-        await state.pc.setLocalDescription(answer);
-        await waitForICE(state.pc);
-        state.rtChannel.send({ type: 'broadcast', event: 'answer', payload: { sdp: state.pc.localDescription } });
-        logSystem('Resposta enviada. Aguardando ICE...', 'info');
+    /* Mensagens de chat recebidas — self: true garante que recebemos as nossas próprias, mantendo a ordem */
+    state.channel.on('broadcast', { event: 'msg' }, ({ payload }) => {
+        const isMine = payload.sid === SESSION_ID;
+        logMsg(payload.author, payload.text, isMine ? 'sent' : 'received');
     });
 
-    state.rtChannel.subscribe(() => {
-        /* Solicita oferta caso Peer A já tenha publicado antes */
-        state.rtChannel.send({ type: 'broadcast', event: 'request-offer', payload: {} });
+    /* Anúncios de entrada/saída de outros usuários */
+    state.channel.on('broadcast', { event: 'announce' }, ({ payload }) => {
+        if (payload.sid === SESSION_ID) return;
+        const verb = payload.type === 'join' ? 'entrou na sala.' : 'saiu da sala.';
+        const cls  = payload.type === 'join' ? 'info' : 'warn';
+        logSystem(`<strong>${esc(payload.username)}</strong> ${verb}`, cls);
+    });
+
+    /* Presença — mantém a lista de usuários online atualizada */
+    state.channel.on('presence', { event: 'sync' }, () => {
+        renderUsers(state.channel.presenceState());
+    });
+
+    state.channel.subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') {
+            await state.channel.track({ username: state.username, sid: SESSION_ID });
+            await state.channel.send({
+                type: 'broadcast', event: 'announce',
+                payload: { type: 'join', username: state.username, sid: SESSION_ID },
+            });
+
+            state.connected = true;
+            setStatus('connected');
+            roomCodeDisplay.textContent = code;
+            document.getElementById('infoRoom').textContent = code;
+            connectSection.style.display = 'none';
+            roomSection.style.display    = '';
+            onlineSection.style.display  = '';
+
+            logSystem(`Conectado à sala <strong>${code}</strong>. Compartilhe o código para convidar outros.`, 'success');
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+            setStatus('idle');
+            state.connected = false;
+            logSystem('Falha na conexão. Verifique sua rede e tente novamente.', 'error');
+        }
     });
 }
 
-function resetConnection() {
-    if (state.rtChannel) {
-        sb.removeChannel(state.rtChannel);
-        state.rtChannel = null;
+async function leaveRoom(silent = false) {
+    if (!state.channel) return;
+    if (state.connected && !silent) {
+        try {
+            await state.channel.send({
+                type: 'broadcast', event: 'announce',
+                payload: { type: 'leave', username: state.username, sid: SESSION_ID },
+            });
+        } catch (_) { /* ignorar erros de envio ao sair */ }
     }
-    if (state.pc) {
-        state.pc.close();
-        state.pc = null;
-        state.channel = null;
-        state.connected = false;
-    }
-    setStatus('idle');
-}
-
-/* ── Demo ── */
-const DEMO_MSGS = [
-    'ei, testando a conexão',
-    'latência baixa aqui',
-    'o canal DTLS está criptografado',
-    'sem servidor no meio — P2P direto',
-    'WebRTC é subestimado para isso',
-];
-
-let demoInterval = null;
-
-function startDemo() {
-    if (state.demoMode) return;
-    state.demoMode = true;
-    state.connected = true;
-    setStatus('demo');
-    logSystem('Modo demo ativo — mensagens simuladas.', 'info');
-    logSystem('Para P2P real, use "Criar Sala" com outro browser.', '');
-    let i = 0;
-    demoInterval = setInterval(() => {
-        logMsg('demo-peer', DEMO_MSGS[i % DEMO_MSGS.length]);
-        i++;
-    }, 3500 + Math.random() * 2000);
-}
-
-function stopDemo() {
-    if (!state.demoMode) return;
-    clearInterval(demoInterval);
-    demoInterval = null;
-    state.demoMode = false;
+    await sb.removeChannel(state.channel);
+    state.channel   = null;
+    state.roomCode  = null;
     state.connected = false;
     setStatus('idle');
-    logSystem('Modo demo encerrado.', 'warn');
+
+    usersList.innerHTML = '';
+    onlineCount.textContent = '0';
+    document.getElementById('infoRoom').textContent = '—';
+    connectSection.style.display = '';
+    roomSection.style.display    = 'none';
+    onlineSection.style.display  = 'none';
+
+    if (!silent) logSystem('Você saiu da sala.', 'warn');
 }
 
 /* ── Comandos ── */
-const HELP = `<span style="color:var(--blue)">Comandos:</span>
-  /nick [nome]    — define seu nome de usuário
-  /demo           — inicia modo demo (sem peer real)
-  /stopdemo       — encerra o modo demo
-  /clear          — limpa o terminal
-  /help           — esta ajuda
+const AJUDA = `<span style="color:var(--blue)">Comandos:</span>
+  /nick [nome]  — alterar seu apelido
+  /leave        — sair da sala atual
+  /clear        — limpar o terminal
+  /help         — esta ajuda
 
-<span style="color:var(--text-dim)">Para chat real: "Criar Sala" → compartilhe o código de 6 dígitos.</span>`.trim();
+<span style="color:var(--text-dim)">Para conversar: insira um código de 6 dígitos e entre, ou clique em "Nova Sala".</span>`.trim();
 
 function handleCommand(cmd) {
     const [base, ...args] = cmd.trim().split(/\s+/);
     const arg = args.join(' ');
     switch (base.toLowerCase()) {
-        case '/help':     log(HELP, 'system info'); break;
+        case '/help':
+            log(AJUDA, 'system info');
+            break;
         case '/nick':
             if (!arg) return logSystem('Uso: /nick [nome]', 'warn');
+            if (arg.length > 24) return logSystem('Apelido muito longo (máx. 24 caracteres).', 'warn');
             state.username = arg;
-            inputPrompt.textContent = `${state.username}@p2p:~$`;
-            logSystem(`Nick definido: <strong>${arg}</strong>`, 'success');
+            updateInfoNick();
+            if (state.connected) {
+                state.channel.track({ username: state.username, sid: SESSION_ID });
+            }
+            logSystem(`Apelido definido como <strong>${esc(arg)}</strong>`, 'success');
             break;
-        case '/clear':    output.innerHTML = ''; break;
-        case '/demo':     startDemo(); break;
-        case '/stopdemo': stopDemo(); break;
-        default: logSystem(`Comando desconhecido: <em>${base}</em>. Digite /help.`, 'error');
+        case '/leave':
+            state.connected ? leaveRoom() : logSystem('Você não está em uma sala.', 'warn');
+            break;
+        case '/clear':
+            output.innerHTML = '';
+            break;
+        default:
+            logSystem(`Comando desconhecido: <em>${esc(base)}</em>. Digite /help.`, 'error');
     }
 }
 
+/* ── Enviar ── */
 function sendMessage(text) {
     if (!text.trim()) return;
     if (text.startsWith('/')) { handleCommand(text); return; }
-    if (!state.connected) {
-        logSystem('Sem conexão ativa. Use "Criar Sala", "Entrar na Sala" ou /demo.', 'warn');
+    if (!state.connected || !state.channel) {
+        logSystem('Você não está em uma sala. Digite um código e clique em "Entrar na Sala".', 'warn');
         return;
     }
-    if (state.demoMode) { logMsg(state.username, text, 'sent'); return; }
-    if (state.channel && state.channel.readyState === 'open') {
-        state.channel.send(JSON.stringify({ author: state.username, text }));
-        logMsg(state.username, text, 'sent');
-    } else {
-        logSystem('Canal não está pronto.', 'warn');
-    }
+    state.channel.send({
+        type: 'broadcast',
+        event: 'msg',
+        payload: { author: state.username, text: text.trim(), sid: SESSION_ID },
+    });
 }
 
 /* ── Init ── */
 document.addEventListener('DOMContentLoaded', () => {
-    const webRTCSupported = typeof RTCPeerConnection !== 'undefined';
+    updateInfoNick();
+    logSystem('Chat em Grupo — Supabase Realtime Broadcast + Presence', 'info');
+    logSystem('Digite um código de 6 dígitos para entrar, ou clique em "Nova Sala" para criar uma.', '');
+    logSystem('Digite /help para ver os comandos.', '');
 
-    logSystem('P2P Chat — WebRTC DataChannel + Supabase Realtime', 'info');
-    if (webRTCSupported) {
-        logSystem('WebRTC disponível. Crie uma sala ou entre numa com o código.', 'success');
-        logSystem('Ou digite /demo para testar sem um peer real.', '');
-    } else {
-        logSystem('WebRTC não disponível neste ambiente.', 'warn');
-        logSystem('Use /demo para ver a interface em funcionamento.', '');
-    }
+    document.getElementById('btnJoin').addEventListener('click', () => joinRoom(roomCodeInput.value));
 
-    document.getElementById('btnCreateRoom').addEventListener('click', () => {
-        if (!webRTCSupported) return logSystem('WebRTC não suportado.', 'error');
-        joinSection.style.display = 'none';
-        createRoom();
+    document.getElementById('btnNew').addEventListener('click', () => {
+        const code = genCode();
+        roomCodeInput.value = code;
+        joinRoom(code);
     });
 
-    document.getElementById('btnJoinRoom').addEventListener('click', () => {
-        if (!webRTCSupported) return logSystem('WebRTC não suportado.', 'error');
-        roomCodeSection.style.display = 'none';
-        joinSection.style.display = 'block';
-        roomCodeInput.focus();
-    });
-
-    btnConfirmJoin.addEventListener('click', joinRoom);
-
-    roomCodeInput.addEventListener('keydown', e => {
-        if (e.key === 'Enter') joinRoom();
-    });
+    document.getElementById('btnLeave').addEventListener('click', leaveRoom);
 
     document.getElementById('btnCopyCode').addEventListener('click', () => {
-        const code = roomCodeDisplay.textContent;
-        if (!code) return;
-        navigator.clipboard.writeText(code).then(() => {
+        navigator.clipboard.writeText(state.roomCode || '').then(() => {
             const btn = document.getElementById('btnCopyCode');
             const orig = btn.textContent;
             btn.textContent = '✓ Copiado!';
             setTimeout(() => { btn.textContent = orig; }, 1500);
         });
+    });
+
+    roomCodeInput.addEventListener('keydown', e => {
+        if (e.key === 'Enter') joinRoom(roomCodeInput.value);
     });
 
     sendBtn.addEventListener('click', () => {
