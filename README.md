@@ -2,7 +2,7 @@
 
 Chat em grupo no navegador usando Supabase Realtime Broadcast + Presence. Compartilhe um código de sala — todos se conectam instantaneamente.
 
-**[→ Abrir demo](https://non-s.github.io/Profile-)**
+**[→ Abrir demo](https://non-s.github.io/CLI-P2P/)**
 
 ## Como funciona
 
@@ -33,7 +33,7 @@ HTML · CSS · JavaScript — sem frameworks, sem etapa de build.
 ## Arquivos
 
 ```
-Profile-/
+CLI-P2P/
 ├── index.html   — layout, sidebar, terminal
 ├── style.css    — tema terminal escuro, responsivo
 ├── script.js    — lógica de canal, broadcast, presence
