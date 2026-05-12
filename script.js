@@ -235,7 +235,7 @@ function sendMessage(text) {
         payload: { author: state.username, text: text.trim(), sid: SESSION_ID },
     });
     /* Persistir mensagem (silencioso em caso de erro) */
-    sb.from('messages').insert({
+    sb.from('clipeer_messages').insert({
         room_code: state.roomCode,
         nick: state.username,
         content: text.trim(),
@@ -257,7 +257,7 @@ function sendMessage(text) {
 */
 async function loadHistory(roomCode) {
     const { data, error } = await sb
-        .from('messages')
+        .from('clipeer_messages')
         .select('nick, content, created_at')
         .eq('room_code', roomCode)
         .order('created_at', { ascending: true })
