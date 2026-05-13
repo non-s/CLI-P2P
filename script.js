@@ -8,6 +8,29 @@ const SESSION_ID = (crypto.randomUUID ? crypto.randomUUID() : Math.random().toSt
 /* Apelido padrão aleatório para minimizar colisões no primeiro carregamento */
 const ADJETIVOS = ['veloz','forte','sombrio','neon','cyber','fantasma','hex','byte','silente','rapido'];
 const SUBSTANTIVOS = ['raposa','lobo','falcão','corvo','gato','dev','bit','node','ping','stack'];
+
+/**
+ * Handles errors: logs to console and shows user feedback.
+ * @param {Error|Object} err
+ * @param {string} [context='']
+ */
+function handleError(err, context = '') {
+  const msg = err?.message || String(err) || 'Erro inesperado';
+  console.error('[handleError]', context, err);
+  setStatus(msg, 'error');
+}
+
+/**
+ * Returns true only if every provided string is non-empty after trimming.
+ * @param {...string} values
+ * @returns {boolean}
+ */
+function validateRequired(...values) {
+  return values.every(v => typeof v === 'string' && v.trim().length > 0);
+}
+
+/** Generates a random nickname from adjective + noun combination.
+ * @returns {string} */
 function randomNick() {
     return ADJETIVOS[Math.floor(Math.random() * ADJETIVOS.length)] + '_' +
            SUBSTANTIVOS[Math.floor(Math.random() * SUBSTANTIVOS.length)];
