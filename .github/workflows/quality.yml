@@ -1,0 +1,52 @@
+name: Quality
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  static-checks:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          check-latest: true
+
+      - name: Validate JavaScript syntax
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find . -path './.git' -prune -o \( -name '*.js' -o -name '*.mjs' \) -print)
+          for file in "${files[@]}"; do
+            node --check "$file"
+          done
+
+      - name: Validate JSON files
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+
+          function walk(dir) {
+            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+              if (entry.name === '.git' || entry.name === 'node_modules') continue;
+              const full = path.join(dir, entry.name);
+              if (entry.isDirectory()) walk(full);
+              if (entry.isFile() && entry.name.endsWith('.json')) {
+                JSON.parse(fs.readFileSync(full, 'utf8'));
+                console.log(`valid json: ${full}`);
+              }
+            }
+          }
+
+          walk('.');
+          NODE
+
+      - name: Check entry page
+        run: test -f index.html
