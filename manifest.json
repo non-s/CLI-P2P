@@ -1,0 +1,19 @@
+{
+  "name": "Chat em Grupo",
+  "short_name": "Group Chat",
+  "description": "Chat em grupo em tempo real usando Firebase Realtime Database.",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "background_color": "#0d1117",
+  "theme_color": "#00b4d8",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
+
