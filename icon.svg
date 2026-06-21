@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Chat em Grupo</title>
+  <desc id="desc">Terminal-style group chat icon.</desc>
+  <rect width="512" height="512" rx="96" fill="#0d1117"/>
+  <path d="M96 152c0-26.5 21.5-48 48-48h224c26.5 0 48 21.5 48 48v132c0 26.5-21.5 48-48 48H219l-77 70c-13 11.8-34 2.6-34-14.9V332h-12c-26.5 0-48-21.5-48-48V152z" fill="#00b4d8"/>
+  <path d="M139 177l52 42-52 42v-36l28-22-28-22v-4zm82 72h124v32H221v-32z" fill="#0d1117"/>
+</svg>
+
