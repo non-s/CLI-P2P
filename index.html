@@ -4,18 +4,18 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Chat em Grupo — non-s</title>
-    <meta name="description" content="Chat em grupo em tempo real no navegador usando Supabase Realtime. Compartilhe um código de sala — todos se conectam instantaneamente.">
+    <meta name="description" content="Chat em grupo em tempo real no navegador usando Firebase Realtime Database. Compartilhe um código de sala — todos se conectam instantaneamente.">
     <meta name="theme-color" content="#00b4d8">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='15' fill='%230d1117'/><text x='10' y='72' font-size='56' font-family='monospace' fill='%2300b4d8' font-weight='700'>gc</text></svg>">
     <link rel="manifest" href="manifest.json">
     <meta property="og:title" content="Chat em Grupo — non-s">
-    <meta property="og:description" content="Chat em grupo em tempo real via Supabase Realtime. Compartilhe um código de sala de 6 dígitos.">
+    <meta property="og:description" content="Chat em grupo em tempo real via Firebase Realtime Database. Compartilhe um código de sala de 6 dígitos.">
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://non-s.github.io/CLI-P2P/">
     <meta property="og:image" content="https://non-s.github.io/CLI-P2P/icon.svg">
     <meta name="twitter:card" content="summary">
     <meta name="twitter:title" content="Chat em Grupo — non-s">
-    <meta name="twitter:description" content="Chat em grupo em tempo real via Supabase Realtime Broadcast + Presence.">
+    <meta name="twitter:description" content="Chat em grupo em tempo real via Firebase Realtime Database.">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@300;400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
@@ -71,8 +71,8 @@
             <div class="sidebar-section">
                 <div class="section-label">// info</div>
                 <div class="info-block">
-                    <div class="info-line"><span class="k">transporte</span><span class="v">Supabase Realtime</span></div>
-                    <div class="info-line"><span class="k">protocolo</span><span class="v">Broadcast + Presence</span></div>
+                    <div class="info-line"><span class="k">transporte</span><span class="v">Firebase RTDB</span></div>
+                    <div class="info-line"><span class="k">protocolo</span><span class="v">Messages + Presence</span></div>
                     <div class="info-line"><span class="k">sala</span><span class="v" id="infoRoom">—</span></div>
                     <div class="info-line"><span class="k">apelido</span><span class="v" id="infoNick">—</span></div>
                 </div>
@@ -106,8 +106,7 @@
 
     </div>
 </div>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="script.js"></script>
+<script type="module" src="script.js"></script>
 <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});</script>
 </body>
 </html>

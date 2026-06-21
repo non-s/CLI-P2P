@@ -1,0 +1,22 @@
+{
+  "rules": {
+    "clipeer_rooms": {
+      "$room": {
+        ".read": "auth != null && $room.matches(/^[0-9]{6}$/)",
+        "messages": {
+          ".indexOn": ["created_at"],
+          "$message": {
+            ".write": "auth != null && $room.matches(/^[0-9]{6}$/)",
+            ".validate": "newData.hasChildren(['type', 'sid', 'created_at']) && newData.child('sid').isString() && newData.child('created_at').isNumber() && (newData.child('type').val() == 'msg' || newData.child('type').val() == 'announce')"
+          }
+        },
+        "presence": {
+          "$sid": {
+            ".write": "auth != null && $room.matches(/^[0-9]{6}$/)",
+            ".validate": "!newData.exists() || (newData.hasChildren(['username', 'sid', 'updated_at']) && newData.child('username').isString() && newData.child('username').val().length <= 24 && newData.child('sid').val() == $sid && newData.child('updated_at').isNumber())"
+          }
+        }
+      }
+    }
+  }
+}

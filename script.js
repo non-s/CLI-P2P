@@ -1,6 +1,31 @@
-const SUPABASE_URL      = 'https://bvquyfzllqnbfxncsacn.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ2cXV5ZnpsbHFuYmZ4bmNzYWNuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgxODU1MzQsImV4cCI6MjA5Mzc2MTUzNH0.xa_rs4bVLoTv58P7U8rDOaPjo1Dqt60q8cR-IWFpbug';
-const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.15.0/firebase-app.js';
+import { getAuth, onAuthStateChanged, signInAnonymously } from 'https://www.gstatic.com/firebasejs/12.15.0/firebase-auth.js';
+import {
+    getDatabase,
+    limitToLast,
+    off,
+    onChildAdded,
+    onDisconnect,
+    onValue,
+    orderByChild,
+    push,
+    query,
+    ref,
+    remove,
+    serverTimestamp,
+    set,
+} from 'https://www.gstatic.com/firebasejs/12.15.0/firebase-database.js';
+import { firebaseConfig } from './firebase-config.js';
+
+const FIREBASE_CONFIGURED = firebaseConfig?.apiKey && !firebaseConfig.apiKey.includes('REPLACE_');
+
+let firebaseAuth = null;
+let realtimeDb = null;
+if (FIREBASE_CONFIGURED) {
+    const firebaseApp = initializeApp(firebaseConfig);
+    firebaseAuth = getAuth(firebaseApp);
+    realtimeDb = getDatabase(firebaseApp);
+}
 
 /* ID de sessão único — usado como chave de presença para que cada aba seja uma entidade distinta */
 const SESSION_ID = (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2));
@@ -37,12 +62,17 @@ function randomNick() {
 }
 
 const state = {
-    channel:    null,
-    roomCode:   null,
-    connected:  false,
-    username:   randomNick(),
-    history:    [],
-    historyIdx: -1,
+    roomCode:       null,
+    connected:      false,
+    username:       randomNick(),
+    history:        [],
+    historyIdx:     -1,
+    roomRef:        null,
+    messagesRef:    null,
+    presenceRef:    null,
+    unsubMessages:  null,
+    unsubPresence:  null,
+    seenMessages:   new Set(),
 };
 
 /* ── DOM ──*/
@@ -102,6 +132,21 @@ function genCode() {
 
 function esc(s) { return String(s).replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
+async function ensureFirebaseReady() {
+    if (!FIREBASE_CONFIGURED) throw new Error('Firebase ainda nao configurado.');
+    if (firebaseAuth.currentUser) return firebaseAuth.currentUser;
+
+    const authReady = new Promise(resolve => {
+        const unsub = onAuthStateChanged(firebaseAuth, user => {
+            if (!user) return;
+            unsub();
+            resolve(user);
+        });
+    });
+    await signInAnonymously(firebaseAuth);
+    return authReady;
+}
+
 function updateInfoNick() {
     document.getElementById('infoNick').textContent = state.username;
     inputPrompt.textContent = `${state.username}@chat:~$`;
@@ -109,7 +154,7 @@ function updateInfoNick() {
 
 /* ── Presença ── */
 function renderUsers(presenceState) {
-    const users = Object.values(presenceState).flat().map(p => p.username);
+    const users = Object.values(presenceState || {}).map(p => p.username).filter(Boolean);
     onlineCount.textContent = users.length;
     usersList.innerHTML = users
         .map(u => `<span class="user-pill${u === state.username ? ' me' : ''}">${esc(u)}${u === state.username ? ' (você)' : ''}</span>`)
@@ -123,78 +168,105 @@ async function joinRoom(code) {
         logSystem('Por favor, insira um código de sala de 6 dígitos.', 'warn');
         return;
     }
-    if (state.channel) await leaveRoom(true);
+    if (state.connected) await leaveRoom(true);
 
     state.roomCode = code;
     setStatus('connecting');
     logSystem(`Entrando na sala ${code}...`, 'info');
 
-    state.channel = sb.channel(`chat-room-${code}`, {
-        config: {
-            broadcast: { self: true },
-            presence:  { key: SESSION_ID },
-        },
-    });
+    try {
+        await ensureFirebaseReady();
+        state.roomRef = ref(realtimeDb, `clipeer_rooms/${code}`);
+        state.messagesRef = ref(realtimeDb, `clipeer_rooms/${code}/messages`);
+        state.presenceRef = ref(realtimeDb, `clipeer_rooms/${code}/presence/${SESSION_ID}`);
+        state.seenMessages.clear();
 
-    /* Mensagens de chat recebidas — self: true garante que recebemos as nossas próprias, mantendo a ordem */
-    state.channel.on('broadcast', { event: 'msg' }, ({ payload }) => {
-        const isMine = payload.sid === SESSION_ID;
-        logMsg(payload.author, payload.text, isMine ? 'sent' : 'received');
-    });
+        await set(state.presenceRef, {
+            username: state.username,
+            sid: SESSION_ID,
+            updated_at: serverTimestamp(),
+        });
+        onDisconnect(state.presenceRef).remove();
 
-    /* Anúncios de entrada/saída de outros usuários */
-    state.channel.on('broadcast', { event: 'announce' }, ({ payload }) => {
-        if (payload.sid === SESSION_ID) return;
-        const verb = payload.type === 'join' ? 'entrou na sala.' : 'saiu da sala.';
-        const cls  = payload.type === 'join' ? 'info' : 'warn';
-        logSystem(`<strong>${esc(payload.username)}</strong> ${verb}`, cls);
-    });
+        state.unsubPresence = onValue(ref(realtimeDb, `clipeer_rooms/${code}/presence`), snapshot => {
+            renderUsers(snapshot.val() || {});
+        });
 
-    /* Presença — mantém a lista de usuários online atualizada */
-    state.channel.on('presence', { event: 'sync' }, () => {
-        renderUsers(state.channel.presenceState());
-    });
+        state.unsubMessages = onChildAdded(
+            query(state.messagesRef, orderByChild('created_at'), limitToLast(100)),
+            snapshot => {
+                if (state.seenMessages.has(snapshot.key)) return;
+                state.seenMessages.add(snapshot.key);
+                const payload = snapshot.val();
+                if (!payload) return;
+                if (payload.type === 'announce') {
+                    if (payload.sid === SESSION_ID) return;
+                    const verb = payload.event === 'join' ? 'entrou na sala.' : 'saiu da sala.';
+                    const cls  = payload.event === 'join' ? 'info' : 'warn';
+                    logSystem(`<strong>${esc(payload.username)}</strong> ${verb}`, cls);
+                    return;
+                }
+                const isMine = payload.sid === SESSION_ID;
+                logMsg(payload.author || 'anonimo', payload.text || '', isMine ? 'sent' : 'received');
+            }
+        );
 
-    state.channel.subscribe(async (status) => {
-        if (status === 'SUBSCRIBED') {
-            await state.channel.track({ username: state.username, sid: SESSION_ID });
-            await state.channel.send({
-                type: 'broadcast', event: 'announce',
-                payload: { type: 'join', username: state.username, sid: SESSION_ID },
-            });
+        await push(state.messagesRef, {
+            type: 'announce',
+            event: 'join',
+            username: state.username,
+            sid: SESSION_ID,
+            created_at: serverTimestamp(),
+        });
 
-            state.connected = true;
-            setStatus('connected');
-            roomCodeDisplay.textContent = code;
-            document.getElementById('infoRoom').textContent = code;
-            connectSection.style.display = 'none';
-            roomSection.style.display    = '';
-            onlineSection.style.display  = '';
+        state.connected = true;
+        setStatus('connected');
+        roomCodeDisplay.textContent = code;
+        document.getElementById('infoRoom').textContent = code;
+        connectSection.style.display = 'none';
+        roomSection.style.display    = '';
+        onlineSection.style.display  = '';
 
-            logSystem(`Conectado à sala <strong>${code}</strong>. Compartilhe o código para convidar outros.`, 'success');
-            await loadHistory(code);
-        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-            setStatus('idle');
-            state.connected = false;
-            logSystem('Falha na conexão. Verifique sua rede e tente novamente.', 'error');
-        }
-    });
+        logSystem(`Conectado à sala <strong>${code}</strong>. Compartilhe o código para convidar outros.`, 'success');
+    } catch (err) {
+        handleError(err, 'joinRoom');
+        setStatus('idle');
+        state.connected = false;
+    }
+    return;
+
 }
 
 async function leaveRoom(silent = false) {
-    if (!state.channel) return;
-    if (state.connected && !silent) {
+    if (!state.connected && !state.presenceRef) return;
+
+    if (state.connected && !silent && state.messagesRef) {
         try {
-            await state.channel.send({
-                type: 'broadcast', event: 'announce',
-                payload: { type: 'leave', username: state.username, sid: SESSION_ID },
+            await push(state.messagesRef, {
+                type: 'announce',
+                event: 'leave',
+                username: state.username,
+                sid: SESSION_ID,
+                created_at: serverTimestamp(),
             });
         } catch (_) { /* ignorar erros de envio ao sair */ }
     }
-    await sb.removeChannel(state.channel);
-    state.channel   = null;
-    state.roomCode  = null;
-    state.connected = false;
+
+    if (state.unsubMessages) state.unsubMessages();
+    if (state.unsubPresence) state.unsubPresence();
+    if (state.messagesRef) off(state.messagesRef);
+    if (state.presenceRef) {
+        try { await remove(state.presenceRef); } catch (_) { /* ignorar cleanup */ }
+    }
+
+    state.roomRef       = null;
+    state.messagesRef   = null;
+    state.presenceRef   = null;
+    state.unsubMessages = null;
+    state.unsubPresence = null;
+    state.roomCode      = null;
+    state.connected     = false;
+    state.seenMessages.clear();
     setStatus('idle');
 
     usersList.innerHTML = '';
@@ -205,6 +277,8 @@ async function leaveRoom(silent = false) {
     onlineSection.style.display  = 'none';
 
     if (!silent) logSystem('Você saiu da sala.', 'warn');
+    return;
+
 }
 
 /* ── Comandos ── */
@@ -228,8 +302,12 @@ function handleCommand(cmd) {
             if (arg.length > 24) return logSystem('Apelido muito longo (máx. 24 caracteres).', 'warn');
             state.username = arg;
             updateInfoNick();
-            if (state.connected) {
-                state.channel.track({ username: state.username, sid: SESSION_ID });
+            if (state.connected && state.presenceRef) {
+                set(state.presenceRef, {
+                    username: state.username,
+                    sid: SESSION_ID,
+                    updated_at: serverTimestamp(),
+                });
             }
             logSystem(`Apelido definido como <strong>${esc(arg)}</strong>`, 'success');
             break;
@@ -248,58 +326,25 @@ function handleCommand(cmd) {
 function sendMessage(text) {
     if (!text.trim()) return;
     if (text.startsWith('/')) { handleCommand(text); return; }
-    if (!state.connected || !state.channel) {
+    if (!state.connected || !state.messagesRef) {
         logSystem('Você não está em uma sala. Digite um código e clique em "Entrar na Sala".', 'warn');
         return;
     }
-    state.channel.send({
-        type: 'broadcast',
-        event: 'msg',
-        payload: { author: state.username, text: text.trim(), sid: SESSION_ID },
-    });
-    /* Persistir mensagem (silencioso em caso de erro) */
-    sb.from('clipeer_messages').insert({
-        room_code: state.roomCode,
-        nick: state.username,
-        content: text.trim(),
-    }).catch(() => {});
+    push(state.messagesRef, {
+        type: 'msg',
+        author: state.username,
+        text: text.trim(),
+        sid: SESSION_ID,
+        created_at: serverTimestamp(),
+    }).catch(err => handleError(err, 'sendMessage'));
+    return;
 }
 
-/* ── Histórico de mensagens ──
-   Requer tabela no Supabase:
-   CREATE TABLE IF NOT EXISTS messages (
-     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-     room_code TEXT NOT NULL,
-     nick TEXT NOT NULL DEFAULT 'anônimo',
-     content TEXT NOT NULL,
-     created_at TIMESTAMPTZ DEFAULT NOW()
-   );
-   ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
-   CREATE POLICY "messages_select" ON messages FOR SELECT USING (true);
-   CREATE POLICY "messages_insert" ON messages FOR INSERT WITH CHECK (length(content) > 0 AND length(content) < 2000);
-*/
-async function loadHistory(roomCode) {
-    const { data, error } = await sb
-        .from('clipeer_messages')
-        .select('nick, content, created_at')
-        .eq('room_code', roomCode)
-        .order('created_at', { ascending: true })
-        .limit(100);
-
-    if (error || !data?.length) return;
-
-    logSystem(`── ${data.length} mensagem(ns) anterior(es) ──`, 'info');
-    data.forEach(m => {
-        const isMine = m.nick === state.username;
-        logMsg(m.nick, m.content, isMine ? 'sent' : 'received');
-    });
-    logSystem('── fim do histórico ──', 'info');
-}
 
 /* ── Init ── */
 document.addEventListener('DOMContentLoaded', () => {
     updateInfoNick();
-    logSystem('Chat em Grupo — Supabase Realtime Broadcast + Presence', 'info');
+    logSystem('Chat em Grupo — Firebase Realtime Database', 'info');
     logSystem('Digite um código de 6 dígitos para entrar, ou clique em "Nova Sala" para criar uma.', '');
     logSystem('Digite /help para ver os comandos.', '');
 
