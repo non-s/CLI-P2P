@@ -7,16 +7,26 @@
           ".indexOn": ["created_at"],
           "$message": {
             ".write": "auth != null && $room.matches(/^[0-9]{6}$/)",
-            ".validate": "newData.hasChildren(['type', 'sid', 'created_at']) && newData.child('sid').isString() && newData.child('created_at').isNumber() && (newData.child('type').val() == 'msg' || newData.child('type').val() == 'announce')"
+            ".validate": "newData.hasChildren(['type', 'sid', 'created_at']) && newData.child('sid').isString() && newData.child('sid').val().length <= 80 && newData.child('created_at').isNumber() && (newData.child('type').val() == 'msg' || newData.child('type').val() == 'announce') && (!newData.child('text').exists() || (newData.child('text').isString() && newData.child('text').val().length <= 2000)) && (!newData.child('author').exists() || (newData.child('author').isString() && newData.child('author').val().length <= 24)) && (!newData.child('username').exists() || (newData.child('username').isString() && newData.child('username').val().length <= 24)) && (!newData.child('event').exists() || (newData.child('event').val() == 'join' || newData.child('event').val() == 'leave'))"
           }
         },
         "presence": {
           "$sid": {
+            ".read": "auth != null && $room.matches(/^[0-9]{6}$/)",
             ".write": "auth != null && $room.matches(/^[0-9]{6}$/)",
-            ".validate": "!newData.exists() || (newData.hasChildren(['username', 'sid', 'updated_at']) && newData.child('username').isString() && newData.child('username').val().length <= 24 && newData.child('sid').val() == $sid && newData.child('updated_at').isNumber())"
+            ".validate": "!newData.exists() || (newData.hasChildren(['username', 'sid', 'updated_at']) && newData.child('username').isString() && newData.child('username').val().length <= 24 && newData.child('sid').isString() && newData.child('sid').val() == $sid && newData.child('updated_at').isNumber())"
           }
         }
       }
-    }
+    },
+    "non_s_presence": {
+      ".read": "auth != null",
+      "$uid": {
+        ".write": "auth != null && auth.uid == $uid",
+        ".validate": "!newData.exists() || (newData.hasChildren(['t']) && newData.child('t').isNumber())"
+      }
+    },
+    ".read": false,
+    ".write": false
   }
 }
