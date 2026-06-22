@@ -56,6 +56,9 @@ jobs:
           walk('.');
           NODE
 
+      - name: Validate workflow contracts
+        run: node scripts/check-workflows.js
+
       - name: Validate Firebase config
         run: node scripts/validate-firebase-config.js
 
