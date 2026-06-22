@@ -59,5 +59,8 @@ jobs:
       - name: Validate Firebase config
         run: node scripts/validate-firebase-config.js
 
+      - name: Validate HTML asset references
+        run: node scripts/check-html-assets.js
+
       - name: Check entry page
         run: test -f index.html
