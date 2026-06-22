@@ -1,0 +1,89 @@
+name: Firebase Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".firebaserc"
+      - "firebase.json"
+      - "database.rules.json"
+      - ".github/workflows/firebase-deploy.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firebase-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy-database:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      FIREBASE_PROJECT_ID: non-s-firebase-20260621
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          check-latest: true
+
+      - name: Inspect Firebase credentials
+        id: firebase-preflight
+        env:
+          SERVICE_ACCOUNT_JSON: ${{ secrets.SERVICE_ACCOUNT_JSON }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require("fs");
+
+          const firebaseRc = JSON.parse(fs.readFileSync(".firebaserc", "utf8"));
+          const expectedProject = firebaseRc.projects && firebaseRc.projects.default;
+          const output = process.env.GITHUB_OUTPUT;
+          const rawCredentials = process.env.SERVICE_ACCOUNT_JSON || "";
+
+          if (!expectedProject) {
+            throw new Error(".firebaserc must define projects.default");
+          }
+          if (!rawCredentials.trim()) {
+            console.log(`::warning::SERVICE_ACCOUNT_JSON is not configured. Add a service account from ${expectedProject} to enable Firebase deploys from GitHub Actions.`);
+            fs.appendFileSync(output, "deploy=false\n");
+            process.exit(0);
+          }
+
+          let credentials;
+          try {
+            credentials = JSON.parse(rawCredentials);
+          } catch {
+            console.log("::warning::SERVICE_ACCOUNT_JSON is not valid JSON. Replace the secret to enable Firebase deploys.");
+            fs.appendFileSync(output, "deploy=false\n");
+            process.exit(0);
+          }
+
+          if (credentials.project_id !== expectedProject) {
+            console.log(`::warning::SERVICE_ACCOUNT_JSON belongs to ${credentials.project_id || "an unknown project"}, but this app deploys to ${expectedProject}. Replace the GitHub secret with a service account from ${expectedProject} to enable Firebase deployment.`);
+            fs.appendFileSync(output, "deploy=false\n");
+          } else {
+            fs.appendFileSync(output, "deploy=true\n");
+          }
+          NODE
+
+      - name: Authenticate to Google Cloud
+        if: steps.firebase-preflight.outputs.deploy == 'true'
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.SERVICE_ACCOUNT_JSON }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Deploy Realtime Database rules
+        if: steps.firebase-preflight.outputs.deploy == 'true'
+        run: |
+          set -euo pipefail
+          npx --yes firebase-tools@latest deploy --only database --project "$FIREBASE_PROJECT_ID" --non-interactive

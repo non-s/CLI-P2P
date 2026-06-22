@@ -11,6 +11,7 @@ const requiredFiles = [
   ".github/dependabot.yml",
   ".github/pull_request_template.md",
   ".github/workflows/codeql.yml",
+  ".github/workflows/firebase-deploy.yml",
   ".github/workflows/quality.yml",
   "404.html",
   "CONTRIBUTING.md",
@@ -61,6 +62,13 @@ if (exists(".github/workflows/quality.yml")) {
   const quality = read(".github/workflows/quality.yml");
   for (const token of ["check-workflows.js", "validate-firebase-config.js", "check-cli-p2p-production.js", "check-html-assets.js", "check-repo-contracts.js"]) {
     if (!quality.includes(token)) failures.push(`quality workflow must run ${token}`);
+  }
+}
+
+if (exists(".github/workflows/firebase-deploy.yml")) {
+  const deploy = read(".github/workflows/firebase-deploy.yml");
+  for (const token of ["Inspect Firebase credentials", "google-github-actions/auth@v3", "SERVICE_ACCOUNT_JSON", "steps.firebase-preflight.outputs.deploy == 'true'", "database.rules.json", "firebase-tools@latest deploy --only database"]) {
+    if (!deploy.includes(token)) failures.push(`firebase deploy workflow must include ${token}`);
   }
 }
 
