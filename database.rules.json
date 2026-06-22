@@ -25,7 +25,10 @@
       ".read": "auth != null && query.orderByChild == 't' && query.limitToLast <= 500",
       "$uid": {
         ".write": "auth != null && (auth.uid == $uid || (!newData.exists() && data.exists() && data.child('t').isNumber() && data.child('t').val() < now - 120000))",
-        ".validate": "!newData.exists() || (newData.hasChildren(['t']) && newData.child('t').isNumber() && newData.child('t').val() == now)"
+        ".validate": "!newData.exists() || (newData.hasChildren(['t']) && newData.child('t').isNumber() && newData.child('t').val() == now)",
+        "$other": {
+          ".validate": false
+        }
       }
     },
     ".read": false,
