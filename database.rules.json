@@ -6,8 +6,8 @@
         "messages": {
           ".indexOn": ["created_at"],
           "$message": {
-            ".write": "auth != null && $room.matches(/^[0-9]{6}$/)",
-            ".validate": "newData.hasChildren(['type', 'sid', 'created_at']) && newData.child('sid').isString() && newData.child('sid').val().length <= 80 && newData.child('created_at').isNumber() && (newData.child('type').val() == 'msg' || newData.child('type').val() == 'announce') && (!newData.child('text').exists() || (newData.child('text').isString() && newData.child('text').val().length <= 2000)) && (!newData.child('author').exists() || (newData.child('author').isString() && newData.child('author').val().length <= 24)) && (!newData.child('username').exists() || (newData.child('username').isString() && newData.child('username').val().length <= 24)) && (!newData.child('event').exists() || (newData.child('event').val() == 'join' || newData.child('event').val() == 'leave'))"
+            ".write": "auth != null && $room.matches(/^[0-9]{6}$/) && ((!data.exists() && newData.exists()) || (!newData.exists() && data.exists() && data.child('created_at').isNumber() && data.child('created_at').val() < now - 86400000))",
+            ".validate": "!newData.exists() || (newData.hasChildren(['type', 'sid', 'created_at']) && newData.child('sid').isString() && newData.child('sid').val().length <= 80 && newData.child('created_at').isNumber() && (newData.child('type').val() == 'msg' || newData.child('type').val() == 'announce') && (!newData.child('text').exists() || (newData.child('text').isString() && newData.child('text').val().length <= 2000)) && (!newData.child('author').exists() || (newData.child('author').isString() && newData.child('author').val().length <= 24)) && (!newData.child('username').exists() || (newData.child('username').isString() && newData.child('username').val().length <= 24)) && (!newData.child('event').exists() || (newData.child('event').val() == 'join' || newData.child('event').val() == 'leave')))"
           }
         },
         "presence": {
