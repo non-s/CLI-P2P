@@ -56,5 +56,8 @@ jobs:
           walk('.');
           NODE
 
+      - name: Validate Firebase config
+        run: node scripts/validate-firebase-config.js
+
       - name: Check entry page
         run: test -f index.html
