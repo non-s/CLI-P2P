@@ -2,28 +2,30 @@
   "rules": {
     "clipeer_rooms": {
       "$room": {
-        ".read": "auth != null && $room.matches(/^[0-9]{6}$/)",
         "messages": {
           ".indexOn": ["created_at"],
+          ".read": "auth != null && $room.matches(/^[0-9]{6}$/) && query.orderByChild == 'created_at' && (query.limitToLast <= 100 || query.limitToFirst <= 50)",
           "$message": {
-            ".write": "auth != null && $room.matches(/^[0-9]{6}$/) && ((!data.exists() && newData.exists()) || (!newData.exists() && data.exists() && data.child('created_at').isNumber() && data.child('created_at').val() < now - 86400000))",
-            ".validate": "!newData.exists() || (newData.hasChildren(['type', 'sid', 'created_at']) && newData.child('sid').isString() && newData.child('sid').val().length <= 80 && newData.child('created_at').isNumber() && (newData.child('type').val() == 'msg' || newData.child('type').val() == 'announce') && (!newData.child('text').exists() || (newData.child('text').isString() && newData.child('text').val().length <= 2000)) && (!newData.child('author').exists() || (newData.child('author').isString() && newData.child('author').val().length <= 24)) && (!newData.child('username').exists() || (newData.child('username').isString() && newData.child('username').val().length <= 24)) && (!newData.child('event').exists() || (newData.child('event').val() == 'join' || newData.child('event').val() == 'leave')))"
+            ".write": "auth != null && $room.matches(/^[0-9]{6}$/) && ((!data.exists() && newData.exists() && newData.child('uid').val() == auth.uid) || (!newData.exists() && data.exists() && data.child('created_at').isNumber() && data.child('created_at').val() < now - 86400000))",
+            ".validate": "!newData.exists() || (newData.hasChildren(['type', 'uid', 'sid', 'created_at']) && newData.child('uid').isString() && newData.child('uid').val() == auth.uid && newData.child('sid').isString() && newData.child('sid').val().length <= 160 && newData.child('created_at').isNumber() && newData.child('created_at').val() == now && ((newData.child('type').val() == 'msg' && newData.hasChildren(['author', 'text']) && newData.child('author').isString() && newData.child('author').val().length <= 24 && newData.child('text').isString() && newData.child('text').val().length > 0 && newData.child('text').val().length <= 500) || (newData.child('type').val() == 'announce' && newData.hasChildren(['event', 'username']) && (newData.child('event').val() == 'join' || newData.child('event').val() == 'leave') && newData.child('username').isString() && newData.child('username').val().length > 0 && newData.child('username').val().length <= 24)))"
           }
         },
         "presence": {
+          ".indexOn": ["updated_at"],
+          ".read": "auth != null && $room.matches(/^[0-9]{6}$/) && query.orderByChild == 'updated_at' && (query.limitToLast <= 200 || query.limitToFirst <= 50)",
           "$sid": {
-            ".read": "auth != null && $room.matches(/^[0-9]{6}$/)",
-            ".write": "auth != null && $room.matches(/^[0-9]{6}$/)",
-            ".validate": "!newData.exists() || (newData.hasChildren(['username', 'sid', 'updated_at']) && newData.child('username').isString() && newData.child('username').val().length <= 24 && newData.child('sid').isString() && newData.child('sid').val() == $sid && newData.child('updated_at').isNumber())"
+            ".write": "auth != null && $room.matches(/^[0-9]{6}$/) && (((!data.exists() && newData.exists()) || (data.exists() && newData.exists() && data.child('uid').val() == auth.uid)) && newData.child('uid').val() == auth.uid && newData.child('sid').val() == $sid || (!newData.exists() && data.exists() && (data.child('uid').val() == auth.uid || (data.child('updated_at').isNumber() && data.child('updated_at').val() < now - 120000))))",
+            ".validate": "!newData.exists() || (newData.hasChildren(['uid', 'username', 'sid', 'updated_at']) && newData.child('uid').isString() && newData.child('uid').val() == auth.uid && newData.child('username').isString() && newData.child('username').val().length > 0 && newData.child('username').val().length <= 24 && newData.child('sid').isString() && newData.child('sid').val() == $sid && newData.child('sid').val().length <= 160 && newData.child('updated_at').isNumber() && newData.child('updated_at').val() == now)"
           }
         }
       }
     },
     "non_s_presence": {
-      ".read": "auth != null",
+      ".indexOn": ["t"],
+      ".read": "auth != null && query.orderByChild == 't' && query.limitToLast <= 500",
       "$uid": {
-        ".write": "auth != null && auth.uid == $uid",
-        ".validate": "!newData.exists() || (newData.hasChildren(['t']) && newData.child('t').isNumber())"
+        ".write": "auth != null && (auth.uid == $uid || (!newData.exists() && data.exists() && data.child('t').isNumber() && data.child('t').val() < now - 120000))",
+        ".validate": "!newData.exists() || (newData.hasChildren(['t']) && newData.child('t').isNumber() && newData.child('t').val() == now)"
       }
     },
     ".read": false,

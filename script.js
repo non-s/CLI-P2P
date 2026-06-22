@@ -21,9 +21,21 @@ import {
 import { firebaseConfig } from './firebase-config.js';
 
 const FIREBASE_CONFIGURED = firebaseConfig?.apiKey && !firebaseConfig.apiKey.includes('REPLACE_');
-const ROOM_MESSAGE_RETENTION_MS = 24 * 60 * 60 * 1000;
-const ROOM_MESSAGE_PRUNE_INTERVAL_MS = 5 * 60 * 1000;
-const ROOM_MESSAGE_PRUNE_LIMIT = 50;
+const CLI_P2P_LIMITS = Object.freeze({
+    history: 100,
+    localHistory: 100,
+    messageText: 500,
+    nickname: 24,
+    presence: 200,
+    presencePrune: 50,
+    presenceTtlMs: 2 * 60 * 1000,
+    messageRetentionMs: 24 * 60 * 60 * 1000,
+    pruneIntervalMs: 5 * 60 * 1000,
+    sendCooldownMs: 800,
+    sidBytes: 16,
+});
+
+window.CLI_P2P_LIMITS = CLI_P2P_LIMITS;
 
 let firebaseAuth = null;
 let realtimeDb = null;
@@ -33,125 +45,152 @@ if (FIREBASE_CONFIGURED) {
     realtimeDb = getDatabase(firebaseApp);
 }
 
-/* ID de sessão único — usado como chave de presença para que cada aba seja uma entidade distinta */
-const SESSION_ID = (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2));
+const ADJECTIVES = ['veloz', 'forte', 'neon', 'cyber', 'hex', 'byte', 'silente', 'rapido'];
+const NOUNS = ['dev', 'bit', 'node', 'ping', 'stack', 'kernel', 'shell', 'pixel'];
 
-/* Apelido padrão aleatório para minimizar colisões no primeiro carregamento */
-const ADJETIVOS = ['veloz','forte','sombrio','neon','cyber','fantasma','hex','byte','silente','rapido'];
-const SUBSTANTIVOS = ['raposa','lobo','falcão','corvo','gato','dev','bit','node','ping','stack'];
-
-/**
- * Handles errors: logs to console and shows user feedback.
- * @param {Error|Object} err
- * @param {string} [context='']
- */
-function handleError(err, context = '') {
-  const msg = err?.message || String(err) || 'Erro inesperado';
-  console.error('[handleError]', context, err);
-  setStatus(msg, 'error');
+function secureRandomInt(max) {
+    if (!globalThis.crypto?.getRandomValues) {
+        throw new Error('Web Crypto indisponivel neste navegador.');
+    }
+    const bucket = new Uint32Array(1);
+    const limit = Math.floor(0xffffffff / max) * max;
+    do {
+        globalThis.crypto.getRandomValues(bucket);
+    } while (bucket[0] >= limit);
+    return bucket[0] % max;
 }
 
-/**
- * Returns true only if every provided string is non-empty after trimming.
- * @param {...string} values
- * @returns {boolean}
- */
-function validateRequired(...values) {
-  return values.every(v => typeof v === 'string' && v.trim().length > 0);
+function randomHex(bytes) {
+    if (!globalThis.crypto?.getRandomValues) {
+        throw new Error('Web Crypto indisponivel neste navegador.');
+    }
+    const data = new Uint8Array(bytes);
+    globalThis.crypto.getRandomValues(data);
+    return Array.from(data, b => b.toString(16).padStart(2, '0')).join('');
 }
 
-/** Generates a random nickname from adjective + noun combination.
- * @returns {string} */
 function randomNick() {
-    return ADJETIVOS[Math.floor(Math.random() * ADJETIVOS.length)] + '_' +
-           SUBSTANTIVOS[Math.floor(Math.random() * SUBSTANTIVOS.length)];
+    return `${ADJECTIVES[secureRandomInt(ADJECTIVES.length)]}_${NOUNS[secureRandomInt(NOUNS.length)]}`;
 }
+
+const SESSION_ID = randomHex(CLI_P2P_LIMITS.sidBytes);
 
 const state = {
-    roomCode:       null,
-    connected:      false,
-    username:       randomNick(),
-    history:        [],
-    historyIdx:     -1,
-    roomRef:        null,
-    messagesRef:    null,
-    presenceRef:    null,
-    unsubMessages:  null,
-    unsubPresence:  null,
-    seenMessages:   new Set(),
-    lastPruneAt:     0,
+    roomCode: null,
+    connected: false,
+    username: randomNick(),
+    uid: null,
+    presenceId: null,
+    history: [],
+    historyIdx: -1,
+    roomRef: null,
+    messagesRef: null,
+    presenceListRef: null,
+    presenceRef: null,
+    unsubMessages: null,
+    unsubPresence: null,
+    heartbeatTimer: null,
+    seenMessages: new Set(),
+    lastMessagePruneAt: 0,
+    lastPresencePruneAt: 0,
+    lastSentAt: 0,
 };
 
-/* ── DOM ──*/
-const output         = document.getElementById('output');
-const msgInput       = document.getElementById('msgInput');
-const sendBtn        = document.getElementById('sendBtn');
-const statusDot      = document.getElementById('statusDot');
-const statusText     = document.getElementById('statusText');
-const inputPrompt    = document.getElementById('inputPrompt');
-const roomCodeInput  = document.getElementById('roomCodeInput');
+const output = document.getElementById('output');
+const msgInput = document.getElementById('msgInput');
+const sendBtn = document.getElementById('sendBtn');
+const statusDot = document.getElementById('statusDot');
+const statusText = document.getElementById('statusText');
+const inputPrompt = document.getElementById('inputPrompt');
+const roomCodeInput = document.getElementById('roomCodeInput');
 const roomCodeDisplay = document.getElementById('roomCodeDisplay');
-const usersList      = document.getElementById('usersList');
-const onlineCount    = document.getElementById('onlineCount');
+const usersList = document.getElementById('usersList');
+const onlineCount = document.getElementById('onlineCount');
 const connectSection = document.getElementById('connectSection');
-const roomSection    = document.getElementById('roomSection');
-const onlineSection  = document.getElementById('onlineSection');
+const roomSection = document.getElementById('roomSection');
+const onlineSection = document.getElementById('onlineSection');
 
-/* ── Log ── */
 function now() {
     return new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 }
 
-function log(parts, cls = 'system') {
+function span(className, text) {
+    const element = document.createElement('span');
+    element.className = className;
+    element.textContent = text;
+    return element;
+}
+
+function appendLog(className, nodes) {
     const div = document.createElement('div');
-    div.className = `msg ${cls}`;
-    div.innerHTML = parts;
+    div.className = `msg ${className}`;
+    for (const node of nodes) div.appendChild(node);
+    div.appendChild(span('time', now()));
     output.appendChild(div);
     output.scrollTop = output.scrollHeight;
 }
 
 function logSystem(text, variant = '') {
-    log(`<span class="text">${text}</span><span class="time">${now()}</span>`, `system ${variant}`);
+    appendLog(`system ${variant}`.trim(), [span('text', text)]);
 }
 
 function logMsg(author, text, type = 'received') {
-    const a = author.replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    const t = text.replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    log(`<span class="author">[${a}]</span><span class="text">${t}</span><span class="time">${now()}</span>`, `msg ${type}`);
+    appendLog(type, [
+        span('author', `[${author}]`),
+        span('text', text),
+    ]);
 }
 
-/* ── Status ── */
-function setStatus(s) {
+function logHelp() {
+    logSystem([
+        'Comandos:',
+        '  /nick [nome]  - alterar seu apelido',
+        '  /leave        - sair da sala atual',
+        '  /clear        - limpar o terminal',
+        '  /help         - esta ajuda',
+        '',
+        'Para conversar: insira um codigo de 6 digitos e entre, ou clique em "Nova Sala".',
+    ].join('\n'), 'info');
+}
+
+function setStatus(status) {
     const map = {
-        idle:       { dot: '',           text: 'desconectado' },
+        idle: { dot: '', text: 'desconectado' },
         connecting: { dot: 'connecting', text: 'conectando...' },
-        connected:  { dot: 'connected',  text: 'online' },
+        connected: { dot: 'connected', text: 'online' },
     };
-    const m = map[s] || map.idle;
-    statusDot.className    = `status-dot ${m.dot}`;
-    statusText.textContent = m.text;
+    const next = map[status] || map.idle;
+    statusDot.className = `status-dot ${next.dot}`;
+    statusText.textContent = next.text;
 }
 
-/* ── Helpers ── */
+function stripControls(value) {
+    return String(value || '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function normalizeUsername(value) {
+    const nick = stripControls(value).slice(0, CLI_P2P_LIMITS.nickname);
+    return nick || randomNick();
+}
+
+function normalizeMessage(value) {
+    return String(value || '')
+        .replace(/\r\n?/g, '\n')
+        .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ')
+        .trim()
+        .slice(0, CLI_P2P_LIMITS.messageText);
+}
+
+function normalizeRoomCode(value) {
+    return String(value || '').replace(/\D/g, '').slice(0, 6);
+}
+
 function genCode() {
-    return String(Math.floor(100000 + Math.random() * 900000));
+    return String(secureRandomInt(900000) + 100000);
 }
 
-function esc(s) { return String(s).replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-
-async function ensureFirebaseReady() {
-    if (!FIREBASE_CONFIGURED) throw new Error('Firebase ainda nao configurado.');
-    if (firebaseAuth.currentUser) return firebaseAuth.currentUser;
-
-    const authReady = new Promise(resolve => {
-        const unsub = onAuthStateChanged(firebaseAuth, user => {
-            if (!user) return;
-            unsub();
-            resolve(user);
-        });
-    });
-    await signInAnonymously(firebaseAuth);
-    return authReady;
+function presenceKey(uid) {
+    return `${uid}_${SESSION_ID}`.replace(/[.#$/[\]]/g, '_').slice(0, 160);
 }
 
 function updateInfoNick() {
@@ -159,18 +198,83 @@ function updateInfoNick() {
     inputPrompt.textContent = `${state.username}@chat:~$`;
 }
 
+function handleError(err, context = '') {
+    const msg = err?.message || String(err) || 'Erro inesperado';
+    console.error('[handleError]', context, err);
+    logSystem(msg, 'error');
+}
+
+async function ensureFirebaseReady() {
+    if (!FIREBASE_CONFIGURED) throw new Error('Firebase ainda nao configurado.');
+    if (firebaseAuth.currentUser) return firebaseAuth.currentUser;
+
+    const authReady = new Promise(resolve => {
+        const unsubscribe = onAuthStateChanged(firebaseAuth, user => {
+            if (!user) return;
+            unsubscribe();
+            resolve(user);
+        });
+    });
+    await signInAnonymously(firebaseAuth);
+    return authReady;
+}
+
+function validIncomingMessage(payload) {
+    if (!payload || typeof payload !== 'object') return false;
+    if (typeof payload.sid !== 'string' || typeof payload.uid !== 'string') return false;
+    if (payload.type === 'announce') {
+        return ['join', 'leave'].includes(payload.event)
+            && typeof payload.username === 'string'
+            && payload.username.length <= CLI_P2P_LIMITS.nickname;
+    }
+    if (payload.type === 'msg') {
+        return typeof payload.author === 'string'
+            && payload.author.length <= CLI_P2P_LIMITS.nickname
+            && typeof payload.text === 'string'
+            && payload.text.length <= CLI_P2P_LIMITS.messageText;
+    }
+    return false;
+}
+
+function renderUsers(presenceState) {
+    const staleBefore = Date.now() - CLI_P2P_LIMITS.presenceTtlMs;
+    const users = Object.values(presenceState || {})
+        .filter(user => user && typeof user.username === 'string' && Number(user.updated_at || 0) >= staleBefore)
+        .sort((a, b) => String(a.username).localeCompare(String(b.username), 'pt-BR'))
+        .slice(0, CLI_P2P_LIMITS.presence);
+
+    onlineCount.textContent = String(users.length);
+    usersList.replaceChildren(...users.map(user => {
+        const pill = document.createElement('span');
+        const isMe = user.uid === state.uid && user.sid === state.presenceId;
+        pill.className = `user-pill${isMe ? ' me' : ''}`;
+        pill.textContent = `${user.username}${isMe ? ' (voce)' : ''}`;
+        return pill;
+    }));
+}
+
+async function writePresence() {
+    if (!state.presenceRef || !state.uid || !state.presenceId) return;
+    await set(state.presenceRef, {
+        uid: state.uid,
+        username: state.username,
+        sid: state.presenceId,
+        updated_at: serverTimestamp(),
+    });
+}
+
 async function pruneRoomMessages(force = false) {
     if (!state.messagesRef) return;
     const nowMs = Date.now();
-    if (!force && nowMs - state.lastPruneAt < ROOM_MESSAGE_PRUNE_INTERVAL_MS) return;
-    state.lastPruneAt = nowMs;
+    if (!force && nowMs - state.lastMessagePruneAt < CLI_P2P_LIMITS.pruneIntervalMs) return;
+    state.lastMessagePruneAt = nowMs;
 
     try {
         const staleMessages = await get(query(
             state.messagesRef,
             orderByChild('created_at'),
-            endAt(nowMs - ROOM_MESSAGE_RETENTION_MS),
-            limitToFirst(ROOM_MESSAGE_PRUNE_LIMIT),
+            endAt(nowMs - CLI_P2P_LIMITS.messageRetentionMs),
+            limitToFirst(CLI_P2P_LIMITS.presencePrune),
         ));
         const removals = [];
         staleMessages.forEach(child => removals.push(remove(child.ref)));
@@ -180,20 +284,33 @@ async function pruneRoomMessages(force = false) {
     }
 }
 
-/* ── Presença ── */
-function renderUsers(presenceState) {
-    const users = Object.values(presenceState || {}).map(p => p.username).filter(Boolean);
-    onlineCount.textContent = users.length;
-    usersList.innerHTML = users
-        .map(u => `<span class="user-pill${u === state.username ? ' me' : ''}">${esc(u)}${u === state.username ? ' (você)' : ''}</span>`)
-        .join('');
+async function pruneRoomPresence(force = false) {
+    if (!state.presenceListRef) return;
+    const nowMs = Date.now();
+    if (!force && nowMs - state.lastPresencePruneAt < CLI_P2P_LIMITS.pruneIntervalMs) return;
+    state.lastPresencePruneAt = nowMs;
+
+    try {
+        const stalePresence = await get(query(
+            state.presenceListRef,
+            orderByChild('updated_at'),
+            endAt(nowMs - CLI_P2P_LIMITS.presenceTtlMs),
+            limitToFirst(CLI_P2P_LIMITS.presencePrune),
+        ));
+        const removals = [];
+        stalePresence.forEach(child => {
+            if (child.key !== state.presenceId) removals.push(remove(child.ref));
+        });
+        await Promise.all(removals);
+    } catch (err) {
+        console.warn('[pruneRoomPresence]', err?.message || err);
+    }
 }
 
-/* ── Entrar / Sair ── */
-async function joinRoom(code) {
-    code = code.trim().replace(/\D/g, '');
+async function joinRoom(rawCode) {
+    const code = normalizeRoomCode(rawCode);
     if (code.length !== 6) {
-        logSystem('Por favor, insira um código de sala de 6 dígitos.', 'warn');
+        logSystem('Por favor, insira um codigo de sala de 6 digitos.', 'warn');
         return;
     }
     if (state.connected) await leaveRoom(true);
@@ -203,191 +320,225 @@ async function joinRoom(code) {
     logSystem(`Entrando na sala ${code}...`, 'info');
 
     try {
-        await ensureFirebaseReady();
+        const user = await ensureFirebaseReady();
+        state.uid = user.uid;
+        state.presenceId = presenceKey(user.uid);
         state.roomRef = ref(realtimeDb, `clipeer_rooms/${code}`);
         state.messagesRef = ref(realtimeDb, `clipeer_rooms/${code}/messages`);
-        state.presenceRef = ref(realtimeDb, `clipeer_rooms/${code}/presence/${SESSION_ID}`);
+        state.presenceListRef = ref(realtimeDb, `clipeer_rooms/${code}/presence`);
+        state.presenceRef = ref(realtimeDb, `clipeer_rooms/${code}/presence/${state.presenceId}`);
         state.seenMessages.clear();
 
-        await set(state.presenceRef, {
-            username: state.username,
-            sid: SESSION_ID,
-            updated_at: serverTimestamp(),
-        });
+        await writePresence();
         onDisconnect(state.presenceRef).remove();
 
-        state.unsubPresence = onValue(ref(realtimeDb, `clipeer_rooms/${code}/presence`), snapshot => {
-            renderUsers(snapshot.val() || {});
-        });
+        state.unsubPresence = onValue(
+            query(state.presenceListRef, orderByChild('updated_at'), limitToLast(CLI_P2P_LIMITS.presence)),
+            snapshot => renderUsers(snapshot.val() || {}),
+        );
 
         state.unsubMessages = onChildAdded(
-            query(state.messagesRef, orderByChild('created_at'), limitToLast(100)),
+            query(state.messagesRef, orderByChild('created_at'), limitToLast(CLI_P2P_LIMITS.history)),
             snapshot => {
                 if (state.seenMessages.has(snapshot.key)) return;
                 state.seenMessages.add(snapshot.key);
                 const payload = snapshot.val();
-                if (!payload) return;
+                if (!validIncomingMessage(payload)) return;
                 if (payload.type === 'announce') {
-                    if (payload.sid === SESSION_ID) return;
+                    if (payload.sid === state.presenceId) return;
                     const verb = payload.event === 'join' ? 'entrou na sala.' : 'saiu da sala.';
-                    const cls  = payload.event === 'join' ? 'info' : 'warn';
-                    logSystem(`<strong>${esc(payload.username)}</strong> ${verb}`, cls);
+                    const cls = payload.event === 'join' ? 'info' : 'warn';
+                    logSystem(`${payload.username} ${verb}`, cls);
                     return;
                 }
-                const isMine = payload.sid === SESSION_ID;
+                const isMine = payload.sid === state.presenceId;
                 logMsg(payload.author || 'anonimo', payload.text || '', isMine ? 'sent' : 'received');
-            }
+            },
         );
 
         await push(state.messagesRef, {
             type: 'announce',
             event: 'join',
+            uid: state.uid,
             username: state.username,
-            sid: SESSION_ID,
+            sid: state.presenceId,
             created_at: serverTimestamp(),
         });
-        pruneRoomMessages(true);
+
+        state.heartbeatTimer = window.setInterval(() => {
+            writePresence().catch(err => console.warn('[presence heartbeat]', err?.message || err));
+            pruneRoomPresence().catch(() => {});
+        }, Math.max(30_000, Math.floor(CLI_P2P_LIMITS.presenceTtlMs / 2)));
+
+        await Promise.all([pruneRoomMessages(true), pruneRoomPresence(true)]);
 
         state.connected = true;
         setStatus('connected');
         roomCodeDisplay.textContent = code;
         document.getElementById('infoRoom').textContent = code;
         connectSection.style.display = 'none';
-        roomSection.style.display    = '';
-        onlineSection.style.display  = '';
+        roomSection.style.display = '';
+        onlineSection.style.display = '';
 
-        logSystem(`Conectado à sala <strong>${code}</strong>. Compartilhe o código para convidar outros.`, 'success');
+        logSystem(`Conectado a sala ${code}. Compartilhe o codigo para convidar outros.`, 'success');
     } catch (err) {
         handleError(err, 'joinRoom');
         setStatus('idle');
         state.connected = false;
     }
-    return;
-
 }
 
 async function leaveRoom(silent = false) {
     if (!state.connected && !state.presenceRef) return;
 
-    if (state.connected && !silent && state.messagesRef) {
+    if (state.heartbeatTimer) window.clearInterval(state.heartbeatTimer);
+    state.heartbeatTimer = null;
+
+    if (state.connected && !silent && state.messagesRef && state.uid && state.presenceId) {
         try {
             await push(state.messagesRef, {
                 type: 'announce',
                 event: 'leave',
+                uid: state.uid,
                 username: state.username,
-                sid: SESSION_ID,
+                sid: state.presenceId,
                 created_at: serverTimestamp(),
             });
-        } catch (_) { /* ignorar erros de envio ao sair */ }
+        } catch (_) {
+            // Best effort only: leaving the room should continue even if the announce fails.
+        }
     }
 
     if (state.unsubMessages) state.unsubMessages();
     if (state.unsubPresence) state.unsubPresence();
     if (state.messagesRef) off(state.messagesRef);
+    if (state.presenceListRef) off(state.presenceListRef);
     if (state.presenceRef) {
-        try { await remove(state.presenceRef); } catch (_) { /* ignorar cleanup */ }
+        try { await remove(state.presenceRef); } catch (_) { /* best-effort cleanup */ }
     }
 
-    state.roomRef       = null;
-    state.messagesRef   = null;
-    state.presenceRef   = null;
+    state.roomRef = null;
+    state.messagesRef = null;
+    state.presenceListRef = null;
+    state.presenceRef = null;
     state.unsubMessages = null;
     state.unsubPresence = null;
-    state.roomCode      = null;
-    state.connected     = false;
+    state.roomCode = null;
+    state.connected = false;
+    state.presenceId = null;
     state.seenMessages.clear();
     setStatus('idle');
 
-    usersList.innerHTML = '';
+    usersList.replaceChildren();
     onlineCount.textContent = '0';
-    document.getElementById('infoRoom').textContent = '—';
+    document.getElementById('infoRoom').textContent = '-';
     connectSection.style.display = '';
-    roomSection.style.display    = 'none';
-    onlineSection.style.display  = 'none';
+    roomSection.style.display = 'none';
+    onlineSection.style.display = 'none';
 
-    if (!silent) logSystem('Você saiu da sala.', 'warn');
-    return;
-
+    if (!silent) logSystem('Voce saiu da sala.', 'warn');
 }
-
-/* ── Comandos ── */
-const AJUDA = `<span style="color:var(--blue)">Comandos:</span>
-  /nick [nome]  — alterar seu apelido
-  /leave        — sair da sala atual
-  /clear        — limpar o terminal
-  /help         — esta ajuda
-
-<span style="color:var(--text-dim)">Para conversar: insira um código de 6 dígitos e entre, ou clique em "Nova Sala".</span>`.trim();
 
 function handleCommand(cmd) {
     const [base, ...args] = cmd.trim().split(/\s+/);
     const arg = args.join(' ');
     switch (base.toLowerCase()) {
         case '/help':
-            log(AJUDA, 'system info');
+            logHelp();
             break;
-        case '/nick':
-            if (!arg) return logSystem('Uso: /nick [nome]', 'warn');
-            if (arg.length > 24) return logSystem('Apelido muito longo (máx. 24 caracteres).', 'warn');
-            state.username = arg;
+        case '/nick': {
+            if (!arg) {
+                logSystem('Uso: /nick [nome]', 'warn');
+                return;
+            }
+            const nick = normalizeUsername(arg);
+            state.username = nick;
             updateInfoNick();
             if (state.connected && state.presenceRef) {
-                set(state.presenceRef, {
-                    username: state.username,
-                    sid: SESSION_ID,
-                    updated_at: serverTimestamp(),
-                });
+                writePresence().catch(err => handleError(err, 'nick'));
             }
-            logSystem(`Apelido definido como <strong>${esc(arg)}</strong>`, 'success');
+            logSystem(`Apelido definido como ${nick}`, 'success');
             break;
+        }
         case '/leave':
-            state.connected ? leaveRoom() : logSystem('Você não está em uma sala.', 'warn');
+            if (state.connected) leaveRoom();
+            else logSystem('Voce nao esta em uma sala.', 'warn');
             break;
         case '/clear':
-            output.innerHTML = '';
+            output.replaceChildren();
             break;
         default:
-            logSystem(`Comando desconhecido: <em>${esc(base)}</em>. Digite /help.`, 'error');
+            logSystem(`Comando desconhecido: ${base}. Digite /help.`, 'error');
     }
 }
 
-/* ── Enviar ── */
-function sendMessage(text) {
-    if (!text.trim()) return;
-    if (text.startsWith('/')) { handleCommand(text); return; }
-    if (!state.connected || !state.messagesRef) {
-        logSystem('Você não está em uma sala. Digite um código e clique em "Entrar na Sala".', 'warn');
+function rememberHistory(value) {
+    state.history.unshift(value);
+    state.history = state.history.slice(0, CLI_P2P_LIMITS.localHistory);
+    state.historyIdx = -1;
+}
+
+function sendMessage(rawText) {
+    const trimmed = String(rawText || '').trim();
+    if (!trimmed) return;
+    if (trimmed.startsWith('/')) {
+        handleCommand(trimmed);
         return;
     }
+    if (!state.connected || !state.messagesRef || !state.uid || !state.presenceId) {
+        logSystem('Voce nao esta em uma sala. Digite um codigo e clique em "Entrar na Sala".', 'warn');
+        return;
+    }
+
+    const nowMs = Date.now();
+    if (nowMs - state.lastSentAt < CLI_P2P_LIMITS.sendCooldownMs) {
+        logSystem('Aguarde um instante antes de enviar outra mensagem.', 'warn');
+        return;
+    }
+
+    const text = normalizeMessage(trimmed);
+    if (!text) return;
+    state.lastSentAt = nowMs;
+
     push(state.messagesRef, {
         type: 'msg',
+        uid: state.uid,
         author: state.username,
-        text: text.trim(),
-        sid: SESSION_ID,
+        text,
+        sid: state.presenceId,
         created_at: serverTimestamp(),
     }).catch(err => handleError(err, 'sendMessage'));
-    pruneRoomMessages();
-    return;
+
+    pruneRoomMessages().catch(() => {});
+    pruneRoomPresence().catch(() => {});
 }
 
+function submitInput() {
+    const value = msgInput.value;
+    const normalized = normalizeMessage(value);
+    if (!normalized && !String(value || '').trim().startsWith('/')) return;
+    rememberHistory(value.trim());
+    sendMessage(value);
+    msgInput.value = '';
+}
 
-/* ── Init ── */
 document.addEventListener('DOMContentLoaded', () => {
+    msgInput.maxLength = CLI_P2P_LIMITS.messageText;
+    roomCodeInput.maxLength = 6;
     updateInfoNick();
-    logSystem('Chat em Grupo — Firebase Realtime Database', 'info');
-    logSystem('Digite um código de 6 dígitos para entrar, ou clique em "Nova Sala" para criar uma.', '');
-    logSystem('Digite /help para ver os comandos.', '');
+    logSystem('Chat em Grupo - Firebase Realtime Database', 'info');
+    logSystem('Digite um codigo de 6 digitos para entrar, ou clique em "Nova Sala" para criar uma.');
+    logSystem('Digite /help para ver os comandos.');
 
-    /* Preencher apelido a partir do campo de nickname na entrada */
     const nickField = document.getElementById('nickInput');
     if (nickField) {
+        nickField.maxLength = CLI_P2P_LIMITS.nickname;
         nickField.value = state.username;
         nickField.addEventListener('change', () => {
-            const v = nickField.value.trim();
-            if (v && v.length <= 24) {
-                state.username = v;
-                updateInfoNick();
-            }
+            state.username = normalizeUsername(nickField.value);
+            nickField.value = state.username;
+            updateInfoNick();
+            if (state.connected) writePresence().catch(err => handleError(err, 'nick'));
         });
     }
 
@@ -399,47 +550,51 @@ document.addEventListener('DOMContentLoaded', () => {
         joinRoom(code);
     });
 
-    document.getElementById('btnLeave').addEventListener('click', leaveRoom);
+    document.getElementById('btnLeave').addEventListener('click', () => leaveRoom());
 
     document.getElementById('btnCopyCode').addEventListener('click', () => {
-        navigator.clipboard.writeText(state.roomCode || '').then(() => {
-            const btn = document.getElementById('btnCopyCode');
-            const orig = btn.textContent;
-            btn.textContent = '✓ Copiado!';
-            setTimeout(() => { btn.textContent = orig; }, 1500);
+        const btn = document.getElementById('btnCopyCode');
+        const original = btn.textContent;
+        const code = state.roomCode || '';
+        if (!navigator.clipboard || !code) return;
+        navigator.clipboard.writeText(code).then(() => {
+            btn.textContent = 'Copiado!';
+            setTimeout(() => { btn.textContent = original; }, 1500);
         });
     });
 
-    roomCodeInput.addEventListener('keydown', e => {
-        if (e.key === 'Enter') joinRoom(roomCodeInput.value);
+    roomCodeInput.addEventListener('input', () => {
+        roomCodeInput.value = normalizeRoomCode(roomCodeInput.value);
+    });
+    roomCodeInput.addEventListener('keydown', event => {
+        if (event.key === 'Enter') joinRoom(roomCodeInput.value);
     });
 
-    sendBtn.addEventListener('click', () => {
-        const val = msgInput.value.trim();
-        if (!val) return;
-        state.history.unshift(val);
-        state.historyIdx = -1;
-        sendMessage(val);
-        msgInput.value = '';
-    });
+    sendBtn.addEventListener('click', submitInput);
 
-    msgInput.addEventListener('keydown', e => {
-        if (e.key === 'Enter') {
-            const val = msgInput.value.trim();
-            if (!val) return;
-            state.history.unshift(val);
-            state.historyIdx = -1;
-            sendMessage(val);
-            msgInput.value = '';
+    msgInput.addEventListener('keydown', event => {
+        if (event.key === 'Enter') {
+            submitInput();
+            return;
         }
-        if (e.key === 'ArrowUp') {
+        if (event.key === 'ArrowUp') {
             state.historyIdx = Math.min(state.historyIdx + 1, state.history.length - 1);
             msgInput.value = state.history[state.historyIdx] || '';
-            e.preventDefault();
+            event.preventDefault();
         }
-        if (e.key === 'ArrowDown') {
+        if (event.key === 'ArrowDown') {
             state.historyIdx = Math.max(state.historyIdx - 1, -1);
             msgInput.value = state.historyIdx < 0 ? '' : state.history[state.historyIdx];
         }
+    });
+
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && state.connected) {
+            writePresence().catch(() => {});
+        }
+    });
+
+    window.addEventListener('pagehide', () => {
+        if (state.presenceRef) remove(state.presenceRef).catch(() => {});
     });
 });
