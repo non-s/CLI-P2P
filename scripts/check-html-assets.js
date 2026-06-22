@@ -4,6 +4,13 @@ const path = require("path");
 const root = process.cwd();
 const htmlFiles = [];
 const failures = [];
+const requiredPublicFiles = ["404.html"];
+
+for (const file of requiredPublicFiles) {
+  if (!fs.existsSync(path.join(root, file))) {
+    failures.push(`required public file missing: ${file}`);
+  }
+}
 
 function walk(dir) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
