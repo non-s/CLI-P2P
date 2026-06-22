@@ -18,7 +18,7 @@ function jobBlocks(text) {
   let current = null;
   for (let i = jobsLine + 1; i < lines.length; i += 1) {
     const line = lines[i];
-    const match = line.match(/^  ([A-Za-z0-9_-]+):\s*$/);
+    const match = line.match(/^ {2}([A-Za-z0-9_-]+):\s*$/);
     if (match) {
       if (current) blocks.push(current);
       current = { name: match[1], body: "" };
