@@ -1,7 +1,10 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.15.0/firebase-app.js';
 import { getAuth, onAuthStateChanged, signInAnonymously } from 'https://www.gstatic.com/firebasejs/12.15.0/firebase-auth.js';
 import {
+    endAt,
+    get,
     getDatabase,
+    limitToFirst,
     limitToLast,
     off,
     onChildAdded,
@@ -18,6 +21,9 @@ import {
 import { firebaseConfig } from './firebase-config.js';
 
 const FIREBASE_CONFIGURED = firebaseConfig?.apiKey && !firebaseConfig.apiKey.includes('REPLACE_');
+const ROOM_MESSAGE_RETENTION_MS = 24 * 60 * 60 * 1000;
+const ROOM_MESSAGE_PRUNE_INTERVAL_MS = 5 * 60 * 1000;
+const ROOM_MESSAGE_PRUNE_LIMIT = 50;
 
 let firebaseAuth = null;
 let realtimeDb = null;
@@ -73,6 +79,7 @@ const state = {
     unsubMessages:  null,
     unsubPresence:  null,
     seenMessages:   new Set(),
+    lastPruneAt:     0,
 };
 
 /* ── DOM ──*/
@@ -152,6 +159,27 @@ function updateInfoNick() {
     inputPrompt.textContent = `${state.username}@chat:~$`;
 }
 
+async function pruneRoomMessages(force = false) {
+    if (!state.messagesRef) return;
+    const nowMs = Date.now();
+    if (!force && nowMs - state.lastPruneAt < ROOM_MESSAGE_PRUNE_INTERVAL_MS) return;
+    state.lastPruneAt = nowMs;
+
+    try {
+        const staleMessages = await get(query(
+            state.messagesRef,
+            orderByChild('created_at'),
+            endAt(nowMs - ROOM_MESSAGE_RETENTION_MS),
+            limitToFirst(ROOM_MESSAGE_PRUNE_LIMIT),
+        ));
+        const removals = [];
+        staleMessages.forEach(child => removals.push(remove(child.ref)));
+        await Promise.all(removals);
+    } catch (err) {
+        console.warn('[pruneRoomMessages]', err?.message || err);
+    }
+}
+
 /* ── Presença ── */
 function renderUsers(presenceState) {
     const users = Object.values(presenceState || {}).map(p => p.username).filter(Boolean);
@@ -218,6 +246,7 @@ async function joinRoom(code) {
             sid: SESSION_ID,
             created_at: serverTimestamp(),
         });
+        pruneRoomMessages(true);
 
         state.connected = true;
         setStatus('connected');
@@ -337,6 +366,7 @@ function sendMessage(text) {
         sid: SESSION_ID,
         created_at: serverTimestamp(),
     }).catch(err => handleError(err, 'sendMessage'));
+    pruneRoomMessages();
     return;
 }
 
