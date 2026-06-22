@@ -106,7 +106,7 @@ body { font-family:'Fira Code',monospace;background:var(--bg);color:var(--text);
 .msg { font-size:.84rem;line-height:1.55;padding:.1rem 0; }
 .msg .author { font-weight:700;margin-right:.5rem; }
 .msg .time { color:var(--text-dim);font-size:.68rem;margin-left:.4rem; }
-.msg .text { color:var(--text); }
+.msg .text { color:var(--text);white-space:pre-wrap;overflow-wrap:anywhere; }
 .msg.system { color:var(--text-dim); }
 .msg.system.success .text { color:var(--green); }
 .msg.system.error   .text { color:var(--red); }

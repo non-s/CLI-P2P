@@ -65,6 +65,9 @@ jobs:
       - name: Validate Firebase config
         run: node scripts/validate-firebase-config.js
 
+      - name: Validate CLI-P2P production path
+        run: node scripts/check-cli-p2p-production.js
+
       - name: Validate HTML asset references
         run: node scripts/check-html-assets.js
 
