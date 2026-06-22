@@ -59,6 +59,9 @@ jobs:
       - name: Validate workflow contracts
         run: node scripts/check-workflows.js
 
+      - name: Validate repository contracts
+        run: node scripts/check-repo-contracts.js
+
       - name: Validate Firebase config
         run: node scripts/validate-firebase-config.js
 
