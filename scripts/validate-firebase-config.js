@@ -3,6 +3,12 @@ const path = require("path");
 
 const root = process.cwd();
 const failures = [];
+const scanExtensions = new Set([".js", ".json", ".rules", ".rc", ".env", ".example", ".txt", ".md"]);
+const secretPatterns = [
+  { label: "Firebase service account JSON", pattern: /"type"\s*:\s*"service_account"/i },
+  { label: "Firebase private key block", pattern: /-----BEGIN PRIVATE KEY-----/i },
+  { label: "Firebase Admin SDK credential", pattern: /firebase-adminsdk/i },
+];
 
 function fail(message) {
   failures.push(message);
@@ -29,6 +35,30 @@ function readJson(relPath) {
   } catch (error) {
     fail(`${relPath} is not valid JSON: ${error.message}`);
     return null;
+  }
+}
+
+function shouldScanForSecrets(file) {
+  if (path.relative(root, file) === path.join("scripts", "validate-firebase-config.js")) return false;
+  const basename = path.basename(file);
+  return basename === ".firebaserc" || scanExtensions.has(path.extname(file));
+}
+
+function scanCommittedFirebaseSecrets(dir = root) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === ".git" || entry.name === "node_modules") continue;
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      scanCommittedFirebaseSecrets(full);
+      continue;
+    }
+    if (!entry.isFile() || !shouldScanForSecrets(full)) continue;
+    const text = fs.readFileSync(full, "utf8");
+    for (const { label, pattern } of secretPatterns) {
+      if (pattern.test(text)) {
+        fail(`${path.relative(root, full)} appears to contain ${label}`);
+      }
+    }
   }
 }
 
@@ -129,6 +159,7 @@ function validateRealtimeDatabase(config) {
 
 const firebaseConfig = readJson("firebase.json");
 const firebaseRc = readJson(".firebaserc");
+scanCommittedFirebaseSecrets();
 
 if (firebaseRc) {
   if (!firebaseRc.projects || typeof firebaseRc.projects.default !== "string" || firebaseRc.projects.default.length < 3) {
