@@ -4,7 +4,7 @@ const path = require("path");
 const root = process.cwd();
 const htmlFiles = [];
 const failures = [];
-const requiredPublicFiles = ["404.html"];
+const requiredPublicFiles = ["404.html", "robots.txt", "sitemap.xml"];
 
 for (const file of requiredPublicFiles) {
   if (!fs.existsSync(path.join(root, file))) {
